@@ -194,7 +194,12 @@ class Game:
 
         elif self.state == GameState.PLAYER:
             cam = self.renderer.calc_camera(self.player_car.pos)
-            self.renderer.draw_field(self.field, cam)
+            self.renderer.draw_field(self.field, cam)   # 静的バッファを初回生成
+            # ミニマップは静的バッファ生成後に初回キャッシュ
+            if self.renderer._minimap_surf is None and self.renderer._static_buf is not None:
+                from pygame import transform
+                self.renderer._minimap_surf = transform.scale(
+                    self.renderer._static_buf, (160, 160))
             self.renderer.draw_vision_cone(self.player_car, cam)
             self.player_car.draw(self.screen, cam, color=C_CAR)
             self.renderer.draw_minimap(
@@ -215,7 +220,11 @@ class Game:
             if self.ga_idx < len(self.ga_agents):
                 agent = self.ga_agents[self.ga_idx]
                 cam   = self.renderer.calc_camera(agent.car.pos)
-                self.renderer.draw_field(self.field, cam)
+                self.renderer.draw_field(self.field, cam)   # 静的バッファを初回生成
+                if self.renderer._minimap_surf is None and self.renderer._static_buf is not None:
+                    from pygame import transform
+                    self.renderer._minimap_surf = transform.scale(
+                        self.renderer._static_buf, (160, 160))
                 # 全エージェントの車を薄く描画
                 for i, ag in enumerate(self.ga_agents):
                     if i == self.ga_idx:

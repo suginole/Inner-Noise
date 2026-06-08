@@ -8,18 +8,38 @@ from config import *
 
 
 class Renderer:
-    """ゲーム画面の描画を担当する。"""
+    """ゲーム画面の描画を担当する。
+
+    レンダリング戦略:
+      1. 地形ブリット: source_rectで画面分のみ転送（全体の1/11に削減）
+      2. 静的レイヤ: 地形・ゴール・スタートは小型バッファに一度だけ複写
+      3. 動的レイヤ: 車・餌・コーンは毎フレーム描画（小さいので高速）
+      4. HUD: 画面座標固定のため常に高速
+    """
 
     def __init__(self, screen: pygame.Surface):
         self.screen = screen
         self.font_s = pygame.font.SysFont("monospace", 12)
         self.font_m = pygame.font.SysFont("monospace", 15, bold=True)
         self.font_l = pygame.font.SysFont("monospace", 22, bold=True)
-        self._field_surf_cache = None
-        # ---- パフォーマンス用キャッシュ ----
-        self._minimap_surf: pygame.Surface | None = None  # ミニマップ地形（静的、一度だけ生成）
-        self._cone_surf: pygame.Surface | None = None     # 視野コーン（サイズ固定、毎フレーム再利用）
-        self._goal_label = None   # 初回レンダリング後にキャッシュ
+
+        # ---- キャッシュ群 ----
+        self._field_surf_cache = None   # 不使用（field.get_surface()内部キャッシュに移行済み）
+
+        # 静的バッファ: 地形 + ゴール + スタートを一度だけ合成した画面サイズのバッファ
+        # カメラ移動時はここからsource_rectで切り出すだけ
+        self._static_buf: pygame.Surface | None = None
+        self._static_cam: pygame.Vector2 | None = None   # 前フレームのカメラ位置
+
+        # ミニマップ地形（静的、初回のみ生成）
+        self._minimap_surf: pygame.Surface | None = None
+
+        # 視野コーン（SRCALPHA Surfaceを一度だけ確保して再利用）
+        self._cone_surf: pygame.Surface | None = None
+
+        # 固定テキストキャッシュ
+        self._goal_label = None
+        self._start_label = None
 
     # ----------------------------------------------------------------
     def calc_camera(self, car_pos: pygame.Vector2) -> pygame.Vector2:
@@ -32,12 +52,9 @@ class Renderer:
 
     # ----------------------------------------------------------------
     def draw_vision_cone(self, car, cam: pygame.Vector2):
-        """車の視野コーン（±45度 / VISION_RANGE）を半透明で描画する。
-        SRCALPHA Surfaceは一度だけ生成して再利用する。
+        """車の視野コーン（±45度 / VISION_RANGE）を描画する。
+        SRCALPHA Surfaceは使わず、輪郭線のみ描画（高速）。
         """
-        if self._cone_surf is None:
-            self._cone_surf = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
-
         sx = int(car.pos.x - cam.x)
         sy = int(car.pos.y - cam.y)
         facing_rad = math.radians(car.angle)
@@ -45,37 +62,56 @@ class Renderer:
         r          = int(VISION_RANGE)
 
         pts = [(sx, sy)]
-        steps = 10   # 12→10に削減
+        steps = 8
         for i in range(steps + 1):
             t = i / steps
             a = facing_rad + half_fov * (2 * t - 1)
             pts.append((sx + math.cos(a) * r, sy + math.sin(a) * r))
 
-        self._cone_surf.fill((0, 0, 0, 0))   # クリア（全透明）
-        pygame.draw.polygon(self._cone_surf, (255, 220, 50, 28), pts)
-        pygame.draw.polygon(self._cone_surf, (255, 220, 50, 55), pts, 1)
-        self.screen.blit(self._cone_surf, (0, 0))
+        # 輪郭線のみ（内側塗りつぶしなし）→ SRCALPHA blit 不要
+        pygame.draw.polygon(self.screen, (80, 70, 20), pts, 1)   # 暗い輪郭
+        # 左右のレイ線
+        pygame.draw.line(self.screen, (100, 90, 30),
+                         (sx, sy), pts[1], 1)
+        pygame.draw.line(self.screen, (100, 90, 30),
+                         (sx, sy), pts[-1], 1)
 
-    def draw_field(self, field, cam: pygame.Vector2):
-        """地形・餌・ゴールを描画する。"""
-        # 地形（キャッシュサーフェスをブリット）
-        surf = field.get_surface()
-        self.screen.blit(surf, (-cam.x, -cam.y))
+    def _build_static_buf(self, field) -> pygame.Surface:
+        """地形全体にゴール・スタートを合成した静的バッファを作る。
+        地形シードごとに1回だけ生成。カメラ移動時は source_rect で切り出す。
+        """
+        buf = field.get_surface().copy()   # 4000x4000のコピー（初回のみ）
 
-        # ゴール（ラベルはキャッシュ）
-        gx = int(field.goal_pos[0] - cam.x)
-        gy = int(field.goal_pos[1] - cam.y)
-        pygame.draw.circle(self.screen, C_GOAL, (gx, gy), GOAL_RADIUS, 3)
+        # ゴール
         if self._goal_label is None:
             self._goal_label = self.font_m.render("GOAL", True, C_GOAL)
-        self.screen.blit(self._goal_label, (gx - 20, gy - 30))
+        gx, gy = int(field.goal_pos[0]), int(field.goal_pos[1])
+        pygame.draw.circle(buf, C_GOAL, (gx, gy), GOAL_RADIUS, 3)
+        buf.blit(self._goal_label, (gx - 20, gy - 30))
 
         # スタート
-        sx = int(field.start_pos[0] - cam.x)
-        sy = int(field.start_pos[1] - cam.y)
-        pygame.draw.circle(self.screen, C_WHITE, (sx, sy), 20, 2)
+        sx, sy = int(field.start_pos[0]), int(field.start_pos[1])
+        pygame.draw.circle(buf, C_WHITE, (sx, sy), 20, 2)
+        if self._start_label is None:
+            self._start_label = self.font_s.render("START", True, C_WHITE)
+        buf.blit(self._start_label, (sx - 20, sy - 30))
 
-        # 餌（高級餌は金色・大きい）
+        return buf
+
+    def draw_field(self, field, cam: pygame.Vector2):
+        """地形・餌・ゴールを描画する。
+        地形・ゴール・スタートは静的バッファから source_rect で切り出す。
+        カメラ移動分のピクセルのみ転送するので高速。
+        """
+        # 静的バッファの初回生成（terrain_seed単位でキャッシュ済み）
+        if self._static_buf is None:
+            self._static_buf = self._build_static_buf(field)
+
+        # 地形: source_rectで画面分のみ切り出して転送（高速）
+        src_rect = pygame.Rect(int(cam.x), int(cam.y), SCREEN_W, SCREEN_H)
+        self.screen.blit(self._static_buf, (0, 0), src_rect)
+
+        # 餌（動的、毎フレーム描画。画面内のものだけ）
         for food_pos, is_premium in field.foods:
             fx = int(food_pos.x - cam.x)
             fy = int(food_pos.y - cam.y)
@@ -92,29 +128,21 @@ class Renderer:
     def draw_minimap(self, field, car_pos: pygame.Vector2,
                      goal_pos: tuple, x: int = 20, y: int = 20,
                      w: int = 160, h: int = 160):
-        """右上にミニマップを描画する。地形部分はキャッシュする。"""
+        """右上にミニマップを描画する。
+        地形は静的バッファを pygame.transform.scale でスケールダウン（高速）。
+        """
         mx = SCREEN_W - w - x
         my = y
 
-        # 地形キャッシュ（初回のみ生成）
+        # 地形キャッシュ: 静的バッファをミニマップサイズにスケール（初回のみ）
         if self._minimap_surf is None:
-            self._minimap_surf = pygame.Surface((w, h))
-            self._minimap_surf.fill((10, 12, 20))
-            scale_x = w / WORLD_W
-            scale_y = h / WORLD_H
-            step = max(1, WORLD_W // (w * 2))
-            for gy_i in range(0, field.hmap.shape[0], step):
-                for gx_i in range(0, field.hmap.shape[1], step):
-                    hv = float(field.hmap[gy_i, gx_i])
-                    px = int(gx_i * TILE * scale_x)
-                    py = int(gy_i * TILE * scale_y)
-                    if hv >= MOUNTAIN_THRESHOLD:
-                        c = C_MOUNTAIN
-                    elif hv <= VALLEY_THRESHOLD:
-                        c = C_VALLEY
-                    else:
-                        c = C_PLAIN
-                    pygame.draw.rect(self._minimap_surf, c, (px, py, 2, 2))
+            if self._static_buf is not None:
+                # 静的バッファ（4000x4000）をミニマップサイズにスケールダウン
+                self._minimap_surf = pygame.transform.scale(self._static_buf, (w, h))
+            else:
+                # 静的バッファがまだない場合は地形サーフェスを直接スケール
+                self._minimap_surf = pygame.transform.scale(
+                    field.get_surface(), (w, h))
 
         self.screen.blit(self._minimap_surf, (mx, my))
         pygame.draw.rect(self.screen, C_GRAY, (mx, my, w, h), 1)

@@ -231,26 +231,45 @@ class Field:
 
     # ----------------------------------------------------------------
     def get_surface(self) -> pygame.Surface:
-        """地形サーフェスを生成してキャッシュする（terrain_seedごとに1回のみ）。"""
+        """地形サーフェスを生成してキャッシュする（terrain_seedごとに1回のみ）。
+        内部では numpyでカラーマップを一括生成し、高速に Surface に転送する。
+        """
         if self.terrain_seed in Field._surface_cache:
             return Field._surface_cache[self.terrain_seed]
 
-        surf = pygame.Surface((WORLD_W, WORLD_H))
+        import numpy as np
         rows, cols = self.hmap.shape
-        for gy in range(rows):
-            for gx in range(cols):
-                h = float(self.hmap[gy, gx])
-                if h >= MOUNTAIN_THRESHOLD:
-                    t = (h - MOUNTAIN_THRESHOLD) / (1.0 - MOUNTAIN_THRESHOLD + 1e-8)
-                    c = _lerp_color(C_PLAIN, C_MOUNTAIN, t)
-                elif h <= VALLEY_THRESHOLD:
-                    t = 1.0 - h / (VALLEY_THRESHOLD + 1e-8)
-                    c = _lerp_color(C_VALLEY, (20, 40, 25), t * 0.5)
-                else:
-                    t = (h - VALLEY_THRESHOLD) / (MOUNTAIN_THRESHOLD - VALLEY_THRESHOLD)
-                    c = _lerp_color(C_VALLEY, C_PLAIN, t)
-                rect = pygame.Rect(gx * TILE, gy * TILE, TILE, TILE)
-                surf.fill(c, rect)
+        # numpyで全ピクセルのカラー配列を一括生成（ループ不要）
+        rgb = np.zeros((rows, cols, 3), dtype=np.uint8)
+        h = self.hmap
+
+        # 山地帯
+        mt_mask = h >= MOUNTAIN_THRESHOLD
+        t_mt = np.clip((h - MOUNTAIN_THRESHOLD) / (1.0 - MOUNTAIN_THRESHOLD + 1e-8), 0, 1)
+        rgb[mt_mask, 0] = (C_PLAIN[0] + (C_MOUNTAIN[0] - C_PLAIN[0]) * t_mt[mt_mask]).astype(np.uint8)
+        rgb[mt_mask, 1] = (C_PLAIN[1] + (C_MOUNTAIN[1] - C_PLAIN[1]) * t_mt[mt_mask]).astype(np.uint8)
+        rgb[mt_mask, 2] = (C_PLAIN[2] + (C_MOUNTAIN[2] - C_PLAIN[2]) * t_mt[mt_mask]).astype(np.uint8)
+
+        # 谷地帯
+        vl_mask = h <= VALLEY_THRESHOLD
+        t_vl = np.clip(1.0 - h / (VALLEY_THRESHOLD + 1e-8), 0, 1) * 0.5
+        c2 = (20, 40, 25)
+        rgb[vl_mask, 0] = (C_VALLEY[0] + (c2[0] - C_VALLEY[0]) * t_vl[vl_mask]).astype(np.uint8)
+        rgb[vl_mask, 1] = (C_VALLEY[1] + (c2[1] - C_VALLEY[1]) * t_vl[vl_mask]).astype(np.uint8)
+        rgb[vl_mask, 2] = (C_VALLEY[2] + (c2[2] - C_VALLEY[2]) * t_vl[vl_mask]).astype(np.uint8)
+
+        # 平地帯
+        pl_mask = ~mt_mask & ~vl_mask
+        t_pl = np.clip((h - VALLEY_THRESHOLD) / (MOUNTAIN_THRESHOLD - VALLEY_THRESHOLD + 1e-8), 0, 1)
+        rgb[pl_mask, 0] = (C_VALLEY[0] + (C_PLAIN[0] - C_VALLEY[0]) * t_pl[pl_mask]).astype(np.uint8)
+        rgb[pl_mask, 1] = (C_VALLEY[1] + (C_PLAIN[1] - C_VALLEY[1]) * t_pl[pl_mask]).astype(np.uint8)
+        rgb[pl_mask, 2] = (C_VALLEY[2] + (C_PLAIN[2] - C_VALLEY[2]) * t_pl[pl_mask]).astype(np.uint8)
+
+        # TILEサイズに拡大（numpy repeat）
+        rgb_big = np.repeat(np.repeat(rgb, TILE, axis=0), TILE, axis=1)
+
+        # numpy配列から pygame.Surface へ変換
+        surf = pygame.surfarray.make_surface(rgb_big.transpose(1, 0, 2))
 
         Field._surface_cache[self.terrain_seed] = surf
         return surf
