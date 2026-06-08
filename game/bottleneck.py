@@ -20,7 +20,7 @@ bottleneck.py — ボトルネック通信路
   get_pulse_history() -> list[list[int]]
       直近20パルスの履歴（HUD表示用）
 """
-from config import BN_HZ, BN_TURN_SEC, BN_PARAMS, BN_PULSES_PER_TURN, FPS
+from config import BN_HZ, BN_TURN_SEC, BN_PARAMS, BN_PULSES_PER_TURN, FPS, VISION_RAYS
 import math
 
 
