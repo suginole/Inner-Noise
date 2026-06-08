@@ -33,11 +33,16 @@ SLOPE_DAMAGE_THRESH= 0.45     # この勾配を超えると落下ダメージ
 
 # ---- エネルギー（空腹） ----
 ENERGY_MAX         = 1.0
-ENERGY_DECAY_BASE  = 0.00015  # 毎フレームの基礎消費
-ENERGY_DECAY_CLIMB = 0.00060  # 登坂中の追加消費
-ENERGY_DECAY_IDLE  = 0.00030  # 停滞中の追加消費（2倍ペナルティ）
+ENERGY_DECAY_BASE  = 0.00150  # 毎フレームの基礎消費（×10）
+ENERGY_DECAY_CLIMB = 0.00600  # 登坂中の追加消費（×10）
+ENERGY_DECAY_IDLE  = 0.00300  # 停滞中の追加消費（×10）
 ENERGY_PER_FOOD    = 0.25     # 餌1個で回復するエネルギー
 IDLE_SPEED_THRESH  = 0.3      # この速度以下を「停滞」とみなす
+
+# ---- 視野（感覚器官：餌探索） ----
+VISION_ANGLE_DEG   = 45.0     # 視野角（片側）
+VISION_RANGE       = WORLD_W / 10  # 視野距離 = マップ幅の1/10 = 400px
+VISION_RAYS        = 5        # 視野内のレイ数（観測ベクトルの次元に影響）
 
 # ---- 餌 ----
 FOOD_COUNT         = 80       # フィールド上の餌の総数

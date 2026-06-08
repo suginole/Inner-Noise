@@ -194,6 +194,7 @@ class Game:
         elif self.state == GameState.PLAYER:
             cam = self.renderer.calc_camera(self.player_car.pos)
             self.renderer.draw_field(self.field, cam)
+            self.renderer.draw_vision_cone(self.player_car, cam)
             self.player_car.draw(self.screen, cam, color=C_CAR)
             self.renderer.draw_minimap(
                 self.field, self.player_car.pos, self.field.goal_pos)
@@ -201,6 +202,13 @@ class Game:
             if self.done_message:
                 color = C_GOAL if self.done_message == "GOAL!" else C_ENERGY_LO
                 self.renderer.draw_overlay(self.done_message, color)
+            # プレイヤーモード用のアクティベーションパネル（観測ベクトルのみ）
+            self.renderer.draw_player_obs_panel(
+                self.player_car.get_observation(self.field),
+                x=SCREEN_W - 430,
+                y=SCREEN_H - 210)
+            hint = self.renderer.font_s.render("M: Menu  R: Reset  ESC: Quit", True, C_GRAY)
+            self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 20))
 
         elif self.state == GameState.GA:
             if self.ga_idx < len(self.ga_agents):
@@ -213,7 +221,8 @@ class Game:
                         continue
                     ag.car.draw(self.screen, cam,
                                 color=(40, 80, 120))
-                # 現在のエージェントを強調
+                # 現在のエージェントの視野コーンと車を強調
+                self.renderer.draw_vision_cone(agent.car, cam)
                 agent.car.draw(self.screen, cam, color=C_CAR_GA)
                 self.renderer.draw_minimap(
                     self.field, agent.car.pos, self.field.goal_pos)
@@ -224,6 +233,13 @@ class Game:
                     total=len(self.ga_agents))
                 self.renderer.draw_fitness_graph(
                     self.ga, 20, 110, w=260, h=80)
+                # アクティベーションパネル（画面右下）
+                self.renderer.draw_activation_panel(
+                    agent.genome,
+                    x=SCREEN_W - 430,
+                    y=SCREEN_H - 210)
+                hint = self.renderer.font_s.render("M: Menu  R: Reset  SPACE: Skip  ESC: Quit", True, C_GRAY)
+                self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 20))
 
 
 # ================================================================

@@ -43,7 +43,8 @@ class Bottleneck:
         self._mode         = "listen"   # "listen" | "speak"
 
         self._obs_buffer: list[list[float]] = []
-        self._last_obs: list[float] = [0.5, 0.0, 0.0, 0.0, 0.0, 0.0]
+        obs_dim = 6 + VISION_RAYS
+        self._last_obs: list[float] = [0.5] + [0.0] * (obs_dim - 1)
         self._last_action: list[float] = [0.0, 0.5, 0.0]
         self._pulse_history: list[list[int]] = []
         self._current_pulse: list[int] = [0, 0, 0, 0]
@@ -149,7 +150,7 @@ class Bottleneck:
         self._turn_timer   = 0.0
         self._mode         = "listen"
         self._obs_buffer.clear()
-        self._last_obs     = [0.5, 0.0, 0.0, 0.0, 0.0, 0.0]
+        self._last_obs     = [0.5] + [0.0] * (6 + VISION_RAYS - 1)
         self._last_action  = [0.0, 0.5, 0.0]
         self._pulse_history.clear()
         self._current_pulse = [0, 0, 0, 0]

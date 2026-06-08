@@ -12,33 +12,43 @@ from game.field import Field
 from game.bottleneck import Bottleneck
 from config import *
 
+# 観測ベクトルの全次元 = 基本6 + 視野VISION_RAYS
+OBS_DIM = 6 + VISION_RAYS
+
 
 class GAGenome:
     """
     シンプルGAのゲノム。
-    観測(6) → 隠れ層(8) → 行動(3) の2層NN。
+    観測(OBS_DIM) → 隠れ層(12) → 行動(3) の2層NN。
     ボトルネック通信路の重みも含む。
     """
     def __init__(self, rng: random.Random | None = None):
         if rng is None:
             rng = random.Random()
-        # W1: (8, 6), b1: (8,)
-        # W2: (3, 8), b2: (3,)
+        # W1: (12, OBS_DIM), b1: (12,)
+        # W2: (3, 12), b2: (3,)
         # bn_w: (3, 4)  ボトルネックデコード重み
-        self.W1   = np.array([[rng.gauss(0, 0.5) for _ in range(6)] for _ in range(8)])
-        self.b1   = np.array([rng.gauss(0, 0.3) for _ in range(8)])
-        self.W2   = np.array([[rng.gauss(0, 0.5) for _ in range(8)] for _ in range(3)])
+        self.W1   = np.array([[rng.gauss(0, 0.5) for _ in range(OBS_DIM)] for _ in range(12)])
+        self.b1   = np.array([rng.gauss(0, 0.3) for _ in range(12)])
+        self.W2   = np.array([[rng.gauss(0, 0.5) for _ in range(12)] for _ in range(3)])
         self.b2   = np.array([rng.gauss(0, 0.3) for _ in range(3)])
         self.bn_w = np.array([[rng.gauss(0, 0.5) for _ in range(4)] for _ in range(3)])
         self.fitness = 0.0
+        # アクティベーション記録（初期値）
+        self.last_input_act:  list[float] = [0.0] * OBS_DIM
+        self.last_hidden_act: list[float] = [0.0] * 12
+        self.last_output_act: list[float] = [0.5, 0.5, 0.0]
 
     def forward(self, obs: list[float]) -> list[float]:
         """観測ベクトルから行動を計算する（ボトルネックを経由しない直接版）。"""
         x = np.array(obs, dtype=np.float32)
         h = np.tanh(self.W1 @ x + self.b1)
         out = self.W2 @ h + self.b2
-        # sigmoid で 0〜1 に変換
         action = 1.0 / (1.0 + np.exp(-out))
+        # アクティベーションを記録（可視化用）
+        self.last_input_act  = x.tolist()          # 観測ベクトル（正規化済み）
+        self.last_hidden_act = h.tolist()           # 隠れ層（tanh: -1〜1）
+        self.last_output_act = action.tolist()      # 出力層（sigmoid: 0〜1）
         return action.tolist()
 
     def mutate(self, rate: float = GA_MUTATION_RATE,
@@ -86,9 +96,13 @@ class GAAgent(Agent):
         # 発話ターン中はボトルネック経由の行動を使う
         if mode == "speak":
             action = self.bottleneck.get_action()
+            # 行動をゲノムの出力アクティベーションに反映
+            self.genome.last_output_act = list(action)
         else:
             # 傾聴ターン中は直接ゲノムで行動（スタブ）
             action = self.genome.forward(obs)
+        # 現在のパルスをゲノムに保存（可視化用）
+        self.genome._last_bn_pulse = self.bottleneck.get_current_pulse()
         return tuple(max(0.0, min(1.0, v)) for v in action[:3])
 
     def reset(self):
