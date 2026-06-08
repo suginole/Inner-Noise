@@ -51,6 +51,8 @@ FOOD_RADIUS        = 12       # 餌の当たり判定半径 (px)
 FOOD_VALLEY_BIAS   = 0.85     # 谷に出現する確率
 FOOD_MOUNTAIN_THRESH = MOUNTAIN_THRESHOLD + 0.1  # この高さ以上に高級餌が出現
 FOOD_SEED          = 12345    # 餌配置用の固定シード（地形と分離）
+PASS_REWARD_RADIUS = 300      # 峰出口報酬エリアの半径 (px)
+PASS_REWARD_COUNT  = 8        # 峰出口片側に配置する超高級餌の数
 
 # ---- ゴール ----
 GOAL_RADIUS        = 60       # ゴール判定半径 (px)

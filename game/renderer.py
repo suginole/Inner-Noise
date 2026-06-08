@@ -216,19 +216,22 @@ class Renderer:
 
     def _draw_ga_stats(self, ga, x: int, y: int):
         stats = ga.get_stats()
-        bg = pygame.Surface((260, 80), pygame.SRCALPHA)
+        h = 112
+        bg = pygame.Surface((260, h), pygame.SRCALPHA)
         bg.fill((10, 12, 20, 200))
         self.screen.blit(bg, (x, y))
-        pygame.draw.rect(self.screen, (194, 24, 91), (x, y, 260, 80), 1)
+        pygame.draw.rect(self.screen, (194, 24, 91), (x, y, 260, h), 1)
         lines = [
-            f"GA  Gen:{stats['generation']}",
-            f"Best: {stats['best']:.1f}",
-            f"Avg:  {stats['avg']:.1f}",
-            f"Pop:  {ga.pop_size}",
+            f"GA  Gen:{stats['generation']:4d}   Pop:{ga.pop_size}",
+            f"Best:  {stats['best']:8.1f}",
+            f"Avg:   {stats['avg']:8.1f}",
+            f"Worst: {stats['worst']:8.1f}",
+            f"Species: {stats.get('species', '-'):3}   "
+            f"Mut: {stats.get('mut_rate', 0):.3f}/{stats.get('mut_std', 0):.3f}",
         ]
         for i, line in enumerate(lines):
             t = self.font_s.render(line, True, (244, 143, 177))
-            self.screen.blit(t, (x + 6, y + 6 + i * 16))
+            self.screen.blit(t, (x + 6, y + 6 + i * 20))
 
     def _draw_agent_progress(self, idx: int, total: int, x: int, y: int):
         bg = pygame.Surface((260, 24), pygame.SRCALPHA)
@@ -528,35 +531,55 @@ class Renderer:
             self.screen.blit(vt, (bar_x + bar_w + 4, ry))
 
     # ----------------------------------------------------------------
-    def draw_fitness_graph(self, ga, x: int, y: int, w: int = 260, h: int = 80):
-        """GA適応度の推移グラフを描画する。"""
+    def draw_fitness_graph(self, ga, x: int, y: int, w: int = 260, h: int = 100):
+        """適応度の推移グラフ（上段）と種数グラフ（下段）を描画する。"""
         if len(ga.best_fitness_history) < 2:
             return
+
+        h_fit = int(h * 0.65)
+        h_sp  = h - h_fit - 2
+
         bg = pygame.Surface((w, h), pygame.SRCALPHA)
         bg.fill((10, 12, 20, 200))
         self.screen.blit(bg, (x, y))
         pygame.draw.rect(self.screen, (194, 24, 91), (x, y, w, h), 1)
 
-        hist = ga.best_fitness_history[-w:]
+        # ---- 適応度グラフ ----
+        hist     = ga.best_fitness_history[-w:]
         avg_hist = ga.avg_fitness_history[-w:]
         all_vals = hist + avg_hist
         lo = min(all_vals) - 1
-        hi = max(all_vals) + 1
-        rng = hi - lo if hi != lo else 1
+        hi_v = max(all_vals) + 1
+        rng  = hi_v - lo if hi_v != lo else 1
+        n    = len(hist)
 
-        def to_px(v, i):
-            px = x + int(i * w / len(hist))
-            py = y + h - int((v - lo) / rng * (h - 4)) - 2
+        def to_fit(v, i):
+            px = x + int(i * w / n)
+            py = y + h_fit - int((v - lo) / rng * (h_fit - 4)) - 2
             return px, py
 
-        # best
-        pts_b = [to_px(v, i) for i, v in enumerate(hist)]
+        pts_b = [to_fit(v, i) for i, v in enumerate(hist)]
         if len(pts_b) > 1:
             pygame.draw.lines(self.screen, (244, 143, 177), False, pts_b, 1)
-        # avg
-        pts_a = [to_px(v, i) for i, v in enumerate(avg_hist)]
+        pts_a = [to_fit(v, i) for i, v in enumerate(avg_hist)]
         if len(pts_a) > 1:
             pygame.draw.lines(self.screen, C_GRAY, False, pts_a, 1)
 
-        label = self.font_s.render("Fitness (best/avg)", True, C_GRAY)
+        label = self.font_s.render("Fitness  best/avg", True, C_GRAY)
         self.screen.blit(label, (x + 4, y + 2))
+
+        # ---- 種数グラフ ----
+        sp_hist = getattr(ga, 'species_count_history', [])[-w:]
+        if len(sp_hist) > 1:
+            sy0 = y + h_fit + 2
+            sp_max = max(sp_hist) + 1
+            n_sp = len(sp_hist)
+            pts_sp = []
+            for i, v in enumerate(sp_hist):
+                px = x + int(i * w / n_sp)
+                py = sy0 + h_sp - int(v / sp_max * (h_sp - 2)) - 1
+                pts_sp.append((px, py))
+            pygame.draw.lines(self.screen, (100, 200, 255), False, pts_sp, 1)
+            sp_label = self.font_s.render(
+                f"Species: {sp_hist[-1]}", True, (100, 200, 255))
+            self.screen.blit(sp_label, (x + 4, sy0 + 1))

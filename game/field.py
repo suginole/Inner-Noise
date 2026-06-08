@@ -72,6 +72,7 @@ class Field:
     # 地形はクラスレベルキャッシュ（同じシードなら再計算不要）
     _terrain_cache: dict = {}   # terrain_seed -> hmap (np.ndarray)
     _surface_cache: dict = {}   # terrain_seed -> pygame.Surface
+    _pass_cache:    dict = {}   # terrain_seed -> (pass_x, pass_y)  峰の中心座標
 
     def __init__(self, terrain_seed: int = 42, food_episode: int = 0):
         self.terrain_seed = terrain_seed
@@ -80,8 +81,15 @@ class Field:
         # ---- 地形（完全固定・キャッシュ） ----
         if terrain_seed not in Field._terrain_cache:
             Field._terrain_cache[terrain_seed] = self._build_terrain(terrain_seed)
+            # 峰の中心座標もキャッシュ
+            pass_rng = random.Random(terrain_seed + 999)
+            pass_y   = pass_rng.randint(int(WORLD_H * 0.3), int(WORLD_H * 0.7))
+            Field._pass_cache[terrain_seed] = (WORLD_W // 2, pass_y)
 
         self.hmap = Field._terrain_cache[terrain_seed]
+
+        # 峰の中心座標（峰出口報酬エリアの生成に使用）
+        self.pass_pos: tuple[int, int] = Field._pass_cache[terrain_seed]
 
         # ---- スタート・ゴール位置（地形固定） ----
         self.start_pos = (WORLD_W * 0.15, WORLD_H * 0.5)
@@ -132,12 +140,26 @@ class Field:
         """地形依存確率で餌を配置する。
         - 谷（低地）: 通常餌が高確率で出現
         - 山の上（FOOD_MOUNTAIN_THRESH以上）: 高級餌が出現
+        - 峰出口エリア（峰の左右 PASS_REWARD_RADIUS px内）: 超高級餌を集中配置
         """
         self.foods.clear()
         placed   = 0
         attempts = 0
         rng      = self._food_rng
 
+        # ---- 峰出口エリアに超高級餌を集中配置 ----
+        # 峰の左側（スタート側）と右側（ゴール側）の出口仙近に集中
+        px, py = self.pass_pos
+        for side_dx in (-PASS_REWARD_RADIUS * 0.6, PASS_REWARD_RADIUS * 0.6):
+            for _ in range(PASS_REWARD_COUNT):
+                ox = rng.gauss(px + side_dx, PASS_REWARD_RADIUS * 0.3)
+                oy = rng.gauss(py, PASS_REWARD_RADIUS * 0.4)
+                ox = max(100, min(WORLD_W - 100, ox))
+                oy = max(100, min(WORLD_H - 100, oy))
+                self.foods.append((pygame.Vector2(ox, oy), True))
+                placed += 1
+
+        # ---- 通常配置 ----
         while placed < FOOD_COUNT and attempts < FOOD_COUNT * 30:
             attempts += 1
             x = rng.uniform(100, WORLD_W - 100)
@@ -146,7 +168,7 @@ class Field:
 
             # 高級餌ゾーン（山の上）
             if h >= FOOD_MOUNTAIN_THRESH:
-                if rng.random() < 0.4:   # 山の上には40%の確率で高級餌
+                if rng.random() < 0.4:
                     self.foods.append((pygame.Vector2(x, y), True))
                     placed += 1
                 continue
@@ -155,7 +177,7 @@ class Field:
             if h <= VALLEY_THRESHOLD:
                 prob = FOOD_VALLEY_BIAS
             elif h >= MOUNTAIN_THRESHOLD:
-                prob = 0.05   # 山の中腹はほぼ出ない
+                prob = 0.05
             else:
                 t    = (h - VALLEY_THRESHOLD) / (MOUNTAIN_THRESHOLD - VALLEY_THRESHOLD)
                 prob = FOOD_VALLEY_BIAS * (1.0 - t) + 0.05 * t
