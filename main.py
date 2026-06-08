@@ -56,14 +56,15 @@ class Game:
 
     # ----------------------------------------------------------------
     def init_player_mode(self):
-        self.field        = Field(seed=42)
+        self.field        = Field(terrain_seed=42, food_episode=0)
         self.player_car   = Car(*self.field.start_pos)
         self.player_agent = PlayerAgent(self.player_car, self.field)
         self.player_bn    = Bottleneck()
         self.done_message = ""
 
     def init_ga_mode(self):
-        self.field      = Field(seed=42)
+        # 地形固定・初回エピソードの餌配置
+        self.field      = Field(terrain_seed=42, food_episode=0)
         self.ga         = GeneticAlgorithm(pop_size=GA_POP_SIZE, seed=0)
         self._spawn_ga_agents()
         self.ga_idx     = 0
@@ -179,8 +180,8 @@ class Game:
         if self.ga_idx >= len(self.ga_agents):
             # 世代進化
             self.ga.evolve()
-            # フィールドをリセット（新世代用）
-            self.field = Field(seed=42 + self.ga.generation)
+            # 地形は完全固定、餌のみ世代番号で再配置
+            self.field.reset_foods(food_episode=self.ga.generation)
             self._spawn_ga_agents()
             self.ga_idx = 0
 

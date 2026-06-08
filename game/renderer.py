@@ -75,13 +75,18 @@ class Renderer:
         sy = int(field.start_pos[1] - cam.y)
         pygame.draw.circle(self.screen, C_WHITE, (sx, sy), 20, 2)
 
-        # 餌
-        for food in field.foods:
-            fx = int(food.x - cam.x)
-            fy = int(food.y - cam.y)
+        # 餌（高級餌は金色・大きい）
+        for food_pos, is_premium in field.foods:
+            fx = int(food_pos.x - cam.x)
+            fy = int(food_pos.y - cam.y)
             if -20 < fx < SCREEN_W + 20 and -20 < fy < SCREEN_H + 20:
-                pygame.draw.circle(self.screen, C_FOOD, (fx, fy), 6)
-                pygame.draw.circle(self.screen, C_WHITE, (fx, fy), 6, 1)
+                if is_premium:
+                    pygame.draw.circle(self.screen, (255, 180, 0), (fx, fy), 10)
+                    pygame.draw.circle(self.screen, (255, 240, 100), (fx, fy), 10, 2)
+                    pygame.draw.circle(self.screen, (255, 255, 200), (fx, fy), 4)
+                else:
+                    pygame.draw.circle(self.screen, C_FOOD, (fx, fy), 6)
+                    pygame.draw.circle(self.screen, C_WHITE, (fx, fy), 6, 1)
 
     # ----------------------------------------------------------------
     def draw_minimap(self, field, car_pos: pygame.Vector2,
@@ -117,11 +122,12 @@ class Renderer:
         scale_x = w / WORLD_W
         scale_y = h / WORLD_H
 
-        # 餌
-        for food in field.foods:
-            fx = int(mx + food.x * scale_x)
-            fy = int(my + food.y * scale_y)
-            pygame.draw.circle(self.screen, C_FOOD, (fx, fy), 2)
+        # 餌（高級餌は金色）
+        for food_pos, is_premium in field.foods:
+            fx = int(mx + food_pos.x * scale_x)
+            fy = int(my + food_pos.y * scale_y)
+            c = (255, 180, 0) if is_premium else C_FOOD
+            pygame.draw.circle(self.screen, c, (fx, fy), 2 if is_premium else 1)
 
         # ゴール
         gx = int(mx + goal_pos[0] * scale_x)

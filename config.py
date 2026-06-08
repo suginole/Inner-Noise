@@ -33,10 +33,11 @@ SLOPE_DAMAGE_THRESH= 0.45     # この勾配を超えると落下ダメージ
 
 # ---- エネルギー（空腹） ----
 ENERGY_MAX         = 1.0
-ENERGY_DECAY_BASE  = 0.00150  # 毎フレームの基礎消費（×10）
-ENERGY_DECAY_CLIMB = 0.00600  # 登坂中の追加消費（×10）
-ENERGY_DECAY_IDLE  = 0.00300  # 停滞中の追加消費（×10）
-ENERGY_PER_FOOD    = 0.25     # 餌1個で回復するエネルギー
+ENERGY_DECAY_BASE  = 0.00150  # 毎フレームの基礎消費
+ENERGY_DECAY_CLIMB = 0.04000  # 登坂中の追加消費（勾配強度×この値）
+ENERGY_DECAY_IDLE  = 0.00300  # 停滞中の追加消費
+ENERGY_PER_FOOD    = 0.25     # 通常餌1個で回復するエネルギー
+ENERGY_PER_FOOD_HI = 0.55     # 高級餌（山の上）の回復量
 IDLE_SPEED_THRESH  = 0.3      # この速度以下を「停滞」とみなす
 
 # ---- 視野（感覚器官：餌探索） ----
@@ -48,6 +49,8 @@ VISION_RAYS        = 5        # 視野内のレイ数（観測ベクトルの次
 FOOD_COUNT         = 80       # フィールド上の餌の総数
 FOOD_RADIUS        = 12       # 餌の当たり判定半径 (px)
 FOOD_VALLEY_BIAS   = 0.85     # 谷に出現する確率
+FOOD_MOUNTAIN_THRESH = MOUNTAIN_THRESHOLD + 0.1  # この高さ以上に高級餌が出現
+FOOD_SEED          = 12345    # 餌配置用の固定シード（地形と分離）
 
 # ---- ゴール ----
 GOAL_RADIUS        = 60       # ゴール判定半径 (px)
@@ -61,6 +64,7 @@ BN_PULSES_PER_TURN = BN_HZ * BN_TURN_SEC   # = 20
 # ---- 報酬 ----
 REWARD_GOAL        = 1000.0
 REWARD_FOOD        = 5.0
+REWARD_FOOD_HI     = 20.0     # 高級餌（山の上）の報酬
 REWARD_GOAL_STEP   = 0.01     # ゴールに近づくごとの微小報酬
 PENALTY_DEATH      = -500.0
 PENALTY_FALL       = -10.0

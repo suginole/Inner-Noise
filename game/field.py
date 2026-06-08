@@ -1,6 +1,11 @@
 """
 field.py — 地形生成・餌・ゴール管理
-パーリンノイズで高さマップを生成し、谷/山/峠を配置する。
+
+設計方針:
+  - 地形（hmap）は terrain_seed で完全固定。クラスレベルキャッシュにより
+    同じシードなら何度インスタンス化しても再計算しない。
+  - 餌は food_episode（エピソード番号）ごとに FOOD_SEED ベースで再配置。
+    地形依存確率（谷バイアス）で出現し、山の上には高級餌が出現する。
 """
 import math
 import random
@@ -57,92 +62,117 @@ class PerlinNoise:
 
 
 class Field:
-    """ワールド全体の地形・餌・ゴールを管理する。"""
+    """ワールド全体の地形・餌・ゴールを管理する。
 
-    def __init__(self, seed: int = 42):
-        self.seed = seed
-        self.rng  = random.Random(seed)
-        self._pn  = PerlinNoise(seed)
+    地形（hmap）は terrain_seed で完全固定。
+    餌はエピソードごとに food_episode で再配置される。
+    foods の各要素は (Vector2, is_premium: bool) のタプル。
+    """
 
-        # 高さマップ（0〜1に正規化）
+    # 地形はクラスレベルキャッシュ（同じシードなら再計算不要）
+    _terrain_cache: dict = {}   # terrain_seed -> hmap (np.ndarray)
+    _surface_cache: dict = {}   # terrain_seed -> pygame.Surface
+
+    def __init__(self, terrain_seed: int = 42, food_episode: int = 0):
+        self.terrain_seed = terrain_seed
+        self.food_episode = food_episode
+
+        # ---- 地形（完全固定・キャッシュ） ----
+        if terrain_seed not in Field._terrain_cache:
+            Field._terrain_cache[terrain_seed] = self._build_terrain(terrain_seed)
+
+        self.hmap = Field._terrain_cache[terrain_seed]
+
+        # ---- スタート・ゴール位置（地形固定） ----
+        self.start_pos = (WORLD_W * 0.15, WORLD_H * 0.5)
+        self.goal_pos  = (WORLD_W * 0.85, WORLD_H * 0.5)
+
+        # ---- 餌の配置（エピソードごとに再配置） ----
+        # foods: list of (Vector2, is_premium)
+        self.foods: list[tuple[pygame.Vector2, bool]] = []
+        self._food_rng = random.Random(FOOD_SEED + food_episode)
+        self._place_foods()
+
+    # ----------------------------------------------------------------
+    @staticmethod
+    def _build_terrain(seed: int) -> np.ndarray:
+        """地形の高さマップを生成する（初回のみ）。"""
+        pn   = PerlinNoise(seed)
         cols = WORLD_W // TILE
         rows = WORLD_H // TILE
-        raw = np.zeros((rows, cols), dtype=np.float32)
+        raw  = np.zeros((rows, cols), dtype=np.float32)
         for gy in range(rows):
             for gx in range(cols):
-                wx = gx * TILE
-                wy = gy * TILE
-                raw[gy, gx] = self._pn.octave(
-                    wx, wy,
+                raw[gy, gx] = pn.octave(
+                    gx * TILE, gy * TILE,
                     octaves=TERRAIN_OCTAVES,
                     scale=TERRAIN_SCALE
                 )
         lo, hi = raw.min(), raw.max()
-        self.hmap = (raw - lo) / (hi - lo + 1e-8)   # 0〜1
+        hmap = (raw - lo) / (hi - lo + 1e-8)
 
-        # 巨大な山脈をマップ中央に追加（スリット付き）
-        self._carve_mountain_range()
-
-        # スタート・ゴール位置
-        self.start_pos = (WORLD_W * 0.15, WORLD_H * 0.5)
-        self.goal_pos  = (WORLD_W * 0.85, WORLD_H * 0.5)
-
-        # 餌の配置
-        self.foods: list[pygame.Vector2] = []
-        self._place_foods()
-
-        # 地形サーフェス（描画用キャッシュ）
-        self._surface: pygame.Surface | None = None
-
-    # ----------------------------------------------------------------
-    def _carve_mountain_range(self):
-        """マップ中央に山脈を追加し、1箇所だけ峠（スリット）を作る。"""
-        pass_y = self.rng.randint(
-            int(WORLD_H * 0.3),
-            int(WORLD_H * 0.7)
-        )
-        cx = WORLD_W // 2
-        cols = WORLD_W // TILE
-        rows = WORLD_H // TILE
-        ridge_w = 80  # 山脈の幅 (px)
-
+        # 中央に山脈を追加（峠の位置もシードで固定）
+        pass_rng = random.Random(seed + 999)
+        pass_y   = pass_rng.randint(int(WORLD_H * 0.3), int(WORLD_H * 0.7))
+        cx       = WORLD_W // 2
+        ridge_w  = 80
         for gy in range(rows):
             wy = gy * TILE
-            dist_pass = abs(wy - pass_y)
-            if dist_pass < PASS_WIDTH // 2:
-                continue   # 峠は削らない
+            if abs(wy - pass_y) < PASS_WIDTH // 2:
+                continue
             for gx in range(cols):
-                wx = gx * TILE
-                dist_ridge = abs(wx - cx)
+                dist_ridge = abs(gx * TILE - cx)
                 if dist_ridge < ridge_w:
                     strength = 1.0 - dist_ridge / ridge_w
-                    self.hmap[gy, gx] = min(
-                        1.0,
-                        self.hmap[gy, gx] + strength * 0.55
-                    )
+                    hmap[gy, gx] = min(1.0, hmap[gy, gx] + strength * 0.55)
+        return hmap
 
     # ----------------------------------------------------------------
     def _place_foods(self):
-        """谷バイアスで餌を配置する。"""
-        placed = 0
+        """地形依存確率で餌を配置する。
+        - 谷（低地）: 通常餌が高確率で出現
+        - 山の上（FOOD_MOUNTAIN_THRESH以上）: 高級餌が出現
+        """
+        self.foods.clear()
+        placed   = 0
         attempts = 0
-        while placed < FOOD_COUNT and attempts < FOOD_COUNT * 20:
+        rng      = self._food_rng
+
+        while placed < FOOD_COUNT and attempts < FOOD_COUNT * 30:
             attempts += 1
-            x = self.rng.uniform(100, WORLD_W - 100)
-            y = self.rng.uniform(100, WORLD_H - 100)
+            x = rng.uniform(100, WORLD_W - 100)
+            y = rng.uniform(100, WORLD_H - 100)
             h = self.height_at(x, y)
-            # 谷（低い場所）に高確率で配置
-            if h < VALLEY_THRESHOLD:
+
+            # 高級餌ゾーン（山の上）
+            if h >= FOOD_MOUNTAIN_THRESH:
+                if rng.random() < 0.4:   # 山の上には40%の確率で高級餌
+                    self.foods.append((pygame.Vector2(x, y), True))
+                    placed += 1
+                continue
+
+            # 通常餌ゾーン（谷バイアス）
+            if h <= VALLEY_THRESHOLD:
                 prob = FOOD_VALLEY_BIAS
+            elif h >= MOUNTAIN_THRESHOLD:
+                prob = 0.05   # 山の中腹はほぼ出ない
             else:
-                prob = 1.0 - FOOD_VALLEY_BIAS
-            if self.rng.random() < prob:
-                self.foods.append(pygame.Vector2(x, y))
+                t    = (h - VALLEY_THRESHOLD) / (MOUNTAIN_THRESHOLD - VALLEY_THRESHOLD)
+                prob = FOOD_VALLEY_BIAS * (1.0 - t) + 0.05 * t
+
+            if rng.random() < prob:
+                self.foods.append((pygame.Vector2(x, y), False))
                 placed += 1
+
+    def reset_foods(self, food_episode: int | None = None):
+        """餌をリセットして再配置する（エピソード開始時に呼ぶ）。"""
+        if food_episode is not None:
+            self.food_episode = food_episode
+        self._food_rng = random.Random(FOOD_SEED + self.food_episode)
+        self._place_foods()
 
     # ----------------------------------------------------------------
     def height_at(self, wx: float, wy: float) -> float:
-        """ワールド座標 (wx, wy) の高さ（0〜1）を返す。"""
         gx = int(wx / TILE)
         gy = int(wy / TILE)
         gx = max(0, min(gx, self.hmap.shape[1] - 1))
@@ -150,7 +180,6 @@ class Field:
         return float(self.hmap[gy, gx])
 
     def gradient_at(self, wx: float, wy: float) -> tuple[float, float]:
-        """ワールド座標の勾配ベクトル (dx, dy) を返す（中央差分）。"""
         d = float(TILE)
         dh_x = (self.height_at(wx + d, wy) - self.height_at(wx - d, wy)) / (2 * d)
         dh_y = (self.height_at(wx, wy + d) - self.height_at(wx, wy - d)) / (2 * d)
@@ -163,34 +192,48 @@ class Field:
         return self.height_at(wx, wy) <= VALLEY_THRESHOLD
 
     # ----------------------------------------------------------------
-    def collect_food(self, wx: float, wy: float) -> bool:
-        """指定座標付近の餌を回収する。回収できたら True を返す。"""
+    def collect_food(self, wx: float, wy: float) -> tuple[bool, bool]:
+        """指定座標付近の餌を回収する。
+        Returns: (collected: bool, is_premium: bool)
+        """
         pos = pygame.Vector2(wx, wy)
-        for food in self.foods:
-            if pos.distance_to(food) < FOOD_RADIUS:
-                self.foods.remove(food)
-                return True
-        return False
+        for i, (food_pos, is_premium) in enumerate(self.foods):
+            if pos.distance_to(food_pos) < FOOD_RADIUS:
+                self.foods.pop(i)
+                return True, is_premium
+        return False, False
 
     def respawn_food(self):
-        """餌を1個補充する（谷バイアス）。"""
-        for _ in range(200):
-            x = self.rng.uniform(100, WORLD_W - 100)
-            y = self.rng.uniform(100, WORLD_H - 100)
+        """餌を1個補充する（地形依存確率）。"""
+        rng = self._food_rng
+        for _ in range(300):
+            x = rng.uniform(100, WORLD_W - 100)
+            y = rng.uniform(100, WORLD_H - 100)
             h = self.height_at(x, y)
-            if h < VALLEY_THRESHOLD:
+
+            if h >= FOOD_MOUNTAIN_THRESH:
+                if rng.random() < 0.4:
+                    self.foods.append((pygame.Vector2(x, y), True))
+                    return
+                continue
+
+            if h <= VALLEY_THRESHOLD:
                 prob = FOOD_VALLEY_BIAS
+            elif h >= MOUNTAIN_THRESHOLD:
+                prob = 0.05
             else:
-                prob = 1.0 - FOOD_VALLEY_BIAS
-            if self.rng.random() < prob:
-                self.foods.append(pygame.Vector2(x, y))
+                t    = (h - VALLEY_THRESHOLD) / (MOUNTAIN_THRESHOLD - VALLEY_THRESHOLD)
+                prob = FOOD_VALLEY_BIAS * (1.0 - t) + 0.05 * t
+
+            if rng.random() < prob:
+                self.foods.append((pygame.Vector2(x, y), False))
                 return
 
     # ----------------------------------------------------------------
     def get_surface(self) -> pygame.Surface:
-        """地形サーフェスを生成してキャッシュする（初回のみ描画）。"""
-        if self._surface is not None:
-            return self._surface
+        """地形サーフェスを生成してキャッシュする（terrain_seedごとに1回のみ）。"""
+        if self.terrain_seed in Field._surface_cache:
+            return Field._surface_cache[self.terrain_seed]
 
         surf = pygame.Surface((WORLD_W, WORLD_H))
         rows, cols = self.hmap.shape
@@ -209,7 +252,7 @@ class Field:
                 rect = pygame.Rect(gx * TILE, gy * TILE, TILE, TILE)
                 surf.fill(c, rect)
 
-        self._surface = surf
+        Field._surface_cache[self.terrain_seed] = surf
         return surf
 
 

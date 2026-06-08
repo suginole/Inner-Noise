@@ -86,8 +86,10 @@ class Car:
 
         # ---- エネルギー消費 ----
         decay = ENERGY_DECAY_BASE
-        if slope_along > 0.1:
-            decay += ENERGY_DECAY_CLIMB * slope_along
+        # 登坂消費: 勾配強度に比例して急激に増加
+        if slope_along > 0.0:
+            slope_mag = math.sqrt(gx * gx + gy * gy)
+            decay += ENERGY_DECAY_CLIMB * slope_along * (1.0 + slope_mag * 4.0)
         if abs(self.speed) < IDLE_SPEED_THRESH:
             self._idle_frames += 1
             if self._idle_frames > 30:
@@ -98,10 +100,13 @@ class Car:
         self.energy  = max(0.0, min(ENERGY_MAX, self.energy))
 
         # ---- 餌の回収 ----
-        if field.collect_food(self.pos.x, self.pos.y):
-            self.energy = min(ENERGY_MAX, self.energy + ENERGY_PER_FOOD)
+        collected, is_premium = field.collect_food(self.pos.x, self.pos.y)
+        if collected:
+            gain = ENERGY_PER_FOOD_HI if is_premium else ENERGY_PER_FOOD
+            rwd  = REWARD_FOOD_HI    if is_premium else REWARD_FOOD
+            self.energy = min(ENERGY_MAX, self.energy + gain)
             self.food_collected += 1
-            reward += REWARD_FOOD
+            reward += rwd
             field.respawn_food()
 
         # ---- ゴール判定 ----
@@ -145,8 +150,8 @@ class Car:
         # 最近傍の餌ベクトル（全方向・画面内スケール）
         food_dx, food_dy = 0.0, 0.0
         if field.foods:
-            nearest = min(field.foods, key=lambda f: self.pos.distance_to(f))
-            fvec = nearest - self.pos
+            nearest_pos = min(field.foods, key=lambda f: self.pos.distance_to(f[0]))[0]
+            fvec = nearest_pos - self.pos
             dist = fvec.length()
             if dist > 0:
                 food_dx = max(-1.0, min(1.0, fvec.x / (SCREEN_W * 0.5)))
@@ -171,11 +176,11 @@ class Car:
         # 視野内の餌だけ事前フィルタ（平方距離で高速化）
         nearby_foods = []
         px, py = self.pos.x, self.pos.y
-        for food in field.foods:
-            dx = food.x - px
-            dy = food.y - py
+        for food_pos, _ in field.foods:   # (Vector2, is_premium)
+            dx = food_pos.x - px
+            dy = food_pos.y - py
             if dx * dx + dy * dy <= vision_range_sq:
-                nearby_foods.append((food, dx, dy, math.atan2(dy, dx)))
+                nearby_foods.append((food_pos, dx, dy, math.atan2(dy, dx)))
 
         ray_half_width = (half_fov / max(1, n_rays - 1) + 0.15) if n_rays > 1 else half_fov
 
