@@ -34,7 +34,7 @@ SLOPE_DAMAGE_THRESH= 0.45     # この勾配を超えると落下ダメージ
 # ---- エネルギー（空腹） ----
 ENERGY_MAX         = 1.0
 ENERGY_DECAY_BASE  = 0.00150  # 毎フレームの基礎消費
-ENERGY_DECAY_CLIMB = 0.04000  # 登坂中の追加消費（勾配強度×この値）
+ENERGY_DECAY_CLIMB = 0.07000  # 登坂中の追加消費（勾配強度×この値）→ 旧値の1.75倍
 ENERGY_DECAY_IDLE  = 0.00300  # 停滞中の追加消費
 ENERGY_PER_FOOD    = 0.25     # 通常餌1個で回復するエネルギー
 ENERGY_PER_FOOD_HI = 0.55     # 高級餌（山の上）の回復量

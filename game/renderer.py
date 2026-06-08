@@ -300,6 +300,83 @@ class Renderer:
                 pygame.draw.rect(self.screen, color, (bx, by, 6, 6))
 
     # ----------------------------------------------------------------
+    def draw_bottleneck_dummy(self, x: int, y: int,
+                              pulse_state: list[int] | None = None,
+                              history: list[list[int]] | None = None,
+                              mode: str = "listen",
+                              turn_progress: float = 0.0):
+        """
+        ボトルネック通信路のダミー可視化パネル。
+
+        将来のRNN実装時はこの関数の引数を実際のパルスデータに差し替えるだけでよい。
+
+        Args:
+            x, y: 描画座標
+            pulse_state: 4要素のバイナリリスト [p1,p2,p3,p4] (Noneの場合はダミー)
+            history: 直近20パルスの履歴 (Noneの場合はダミー)
+            mode: "listen" | "speak"
+            turn_progress: ターン進捗 0.0～1.0
+        """
+        import random
+        W = 260
+        H = 90
+
+        bg = pygame.Surface((W, H), pygame.SRCALPHA)
+        bg.fill((8, 10, 18, 220))
+        self.screen.blit(bg, (x, y))
+        pygame.draw.rect(self.screen, (80, 60, 20), (x, y, W, H), 1)
+
+        # タイトル
+        title = self.font_s.render(
+            "BOTTLENECK  5Hz / 4bits  [DUMMY]", True, (180, 140, 60))
+        self.screen.blit(title, (x + 4, y + 3))
+
+        # ダミーパルス状態（ランダム点滅）
+        if pulse_state is None:
+            # ダミー: 時刻に基づいたランダム点滅
+            import time
+            t_seed = int(time.time() * 5) % 16   # 5Hz相当
+            pulse_state = [(t_seed >> i) & 1 for i in range(4)]
+
+        if history is None:
+            # ダミー履歴
+            import time
+            history = []
+            for k in range(16):
+                ts = int(time.time() * 5 - k) % 16
+                history.append([(ts >> i) & 1 for i in range(4)])
+
+        # モード表示
+        mode_color = (100, 160, 220) if mode == "listen" else (100, 200, 120)
+        mode_lbl = self.font_s.render(
+            f"{'LISTEN S→M' if mode == 'listen' else 'SPEAK  M→S'}",
+            True, mode_color)
+        self.screen.blit(mode_lbl, (x + 4, y + 17))
+
+        # ターン進捗バー
+        pygame.draw.rect(self.screen, C_DARK, (x + 4, y + 30, W - 8, 5))
+        pygame.draw.rect(self.screen, mode_color,
+                         (x + 4, y + 30, int((W - 8) * turn_progress), 5))
+
+        # 現在パルス 4 bits
+        for i, bit in enumerate(pulse_state[:4]):
+            bx = x + 4 + i * 26
+            by = y + 40
+            c = C_PULSE_ON if bit else C_PULSE_OFF
+            pygame.draw.rect(self.screen, c, (bx, by, 20, 20))
+            pygame.draw.rect(self.screen, C_GRAY, (bx, by, 20, 20), 1)
+            lt = self.font_s.render(str(bit), True, C_WHITE if bit else C_GRAY)
+            self.screen.blit(lt, (bx + 10 - lt.get_width() // 2, by + 4))
+
+        # 履歴（小さく）
+        for hi, hp in enumerate(history[-16:]):
+            for bi, bit in enumerate(hp[:4]):
+                bx = x + 115 + hi * 9
+                by = y + 40 + bi * 9
+                c = C_PULSE_ON if bit else C_PULSE_OFF
+                pygame.draw.rect(self.screen, c, (bx, by, 7, 7))
+
+    # ----------------------------------------------------------------
     def draw_mode_select(self):
         """モード選択画面を描画する。"""
         self.screen.fill(C_BG)

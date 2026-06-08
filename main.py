@@ -423,19 +423,27 @@ class Game:
         self._draw_ga_overlay(alive_count, best_agent)
         self.renderer.draw_fitness_graph(self.ga, 20, 150, w=280, h=100)
 
-        # 前世代NNスナップショット（右下）
-        if self.prev_best_genome is not None:
-            self._draw_snapshot_label()
+        # アクティベーションモニター: 常に現在最優秀個体の本物を表示
+        display_genome = None
+        if best_agent:
+            display_genome = best_agent.genome
+        elif self.prev_best_genome is not None:
+            display_genome = self.prev_best_genome
+
+        if display_genome is not None:
+            label = "BEST ALIVE" if best_agent else f"PREV GEN {self.ga.generation-1} BEST"
+            lt = self.renderer.font_s.render(label, True, (180, 200, 100))
+            self.screen.blit(lt, (SCREEN_W - 510, SCREEN_H - 245))
             self.renderer.draw_activation_panel(
-                self.prev_best_genome,
-                x=SCREEN_W - 510, y=SCREEN_H - 230)
-        elif best_agent:
-            self.renderer.draw_activation_panel(
-                best_agent.genome,
+                display_genome,
                 x=SCREEN_W - 510, y=SCREEN_H - 230)
 
+        # ボトルネックダミーパネル（アクティベーションモニターの左隣）
+        self.renderer.draw_bottleneck_dummy(
+            x=SCREEN_W - 510 - 270, y=SCREEN_H - 105)
+
         hint = self.renderer.font_s.render(
-            "Tab: Fast Mode  R: Reset  M: Menu  ESC: Quit", True, C_GRAY)
+            "Tab: Fast Mode  M: Menu  ESC: Quit", True, C_GRAY)
         self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 20))
 
     def _draw_snapshot_label(self):
@@ -512,14 +520,23 @@ class Game:
             True, goal_color)
         self.screen.blit(gt, (SCREEN_W // 2 - gt.get_width() // 2, 290))
 
-        # 前世代スナップショット（右側に小さく）
-        if self.prev_best_genome is not None:
-            gen = self.ga.generation - 1
-            sl = font_s.render(f"PREV GEN {gen} BEST (snapshot)", True, (180, 140, 80))
+        # アクティベーションモニター: 常に現在最優秀個体の本物を表示
+        # 高速モード中は最高適応度ゲノムを使用
+        fast_display_genome = self.ga.get_best() if self.ga else None
+        if fast_display_genome is not None:
+            gen_label = f"GEN {self.ga.generation} BEST (live)"
+            sl = font_s.render(gen_label, True, (180, 200, 100))
             self.screen.blit(sl, (SCREEN_W - 510, SCREEN_H - 245))
+            # ダミー入力で表示（高速モード中は実際の観測なし）
+            import numpy as np
+            fast_display_genome.forward([0.5] * 12)
             self.renderer.draw_activation_panel(
-                self.prev_best_genome,
+                fast_display_genome,
                 x=SCREEN_W - 510, y=SCREEN_H - 230)
+
+        # ボトルネックダミーパネル
+        self.renderer.draw_bottleneck_dummy(
+            x=SCREEN_W - 510 - 270, y=SCREEN_H - 105)
 
         hints = [
             "Tab: Switch to Monitor  Enter: Exit Fast Mode",
