@@ -17,11 +17,27 @@ class Renderer:
       4. HUD: 画面座標固定のため常に高速
     """
 
+    # 日本語対応フォントのパス（優先順）
+    _JP_FONTS = [
+        "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    ]
+
+    @staticmethod
+    def _load_font(size: int) -> pygame.font.Font:
+        """日本語対応フォントを読み込む。見つからなければデフォルトにフォールバック。"""
+        import os
+        for path in Renderer._JP_FONTS:
+            if os.path.exists(path):
+                return pygame.font.Font(path, size)
+        return pygame.font.SysFont("monospace", size)
+
     def __init__(self, screen: pygame.Surface):
         self.screen = screen
-        self.font_s = pygame.font.SysFont("monospace", 12)
-        self.font_m = pygame.font.SysFont("monospace", 15, bold=True)
-        self.font_l = pygame.font.SysFont("monospace", 22, bold=True)
+        self.font_s = self._load_font(12)
+        self.font_m = self._load_font(15)
+        self.font_l = self._load_font(20)
 
         # ---- キャッシュ群 ----
         self._field_surf_cache = None   # 不使用（field.get_surface()内部キャッシュに移行済み）

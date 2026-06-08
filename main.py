@@ -25,8 +25,12 @@ class GameState:
     GA_FAST     = "ga_fast"     # 高速学習モード（描画完全スキップ）
 
 
-# カメラ切替閾値
+# カメラ切替閖値
 CAMERA_SWITCH_THRESHOLD = 10
+
+# 高速モード: 1ループあたりの計算ステップ数
+# 増やすほど高速になるが、イベント応答が遅れる
+FAST_STEPS = 200
 
 
 class Game:
@@ -64,6 +68,8 @@ class Game:
 
         # リセット確認ダイアログ
         self.confirm_reset: bool = False
+        # メニュー返報確認ダイアログ
+        self.confirm_menu:  bool = False
 
         self.done_message: str = ""
         self.done_timer:   int = 0
@@ -119,8 +125,6 @@ class Game:
         描画・flip を完全スキップし、イベントキューだけ捌く。
         1ループあたり FAST_STEPS 回の物理+NN計算を実行。
         """
-        FAST_STEPS = 50   # 1ループあたりの計算ステップ数
-
         # イベントキューを捌く（描画なし）
         pygame.event.pump()
         for event in pygame.event.get():
@@ -216,6 +220,15 @@ class Game:
                     pygame.quit()
                     sys.exit()
 
+            # メニュー返報確認ダイアログ中
+            if self.confirm_menu:
+                if event.key == pygame.K_y:
+                    self.confirm_menu = False
+                    self.state = GameState.MENU
+                elif event.key in (pygame.K_n, pygame.K_ESCAPE):
+                    self.confirm_menu = False
+                return
+
             # リセット確認ダイアログ中
             if self.confirm_reset:
                 if event.key == pygame.K_y:
@@ -247,9 +260,11 @@ class Game:
 
             elif self.state == GameState.GA:
                 if event.key == pygame.K_m:
-                    self.state = GameState.MENU
-                if event.key == pygame.K_r:
-                    self.confirm_reset = True
+                    # GA進行中は警告ダイアログを表示
+                    if self.ga is not None and self.ga.generation > 0:
+                        self.confirm_menu = True
+                    else:
+                        self.state = GameState.MENU
                 if event.key == pygame.K_TAB:
                     if self.ga is None:
                         self.init_ga_mode(pop_size=self.fast_cfg_pop_size)
@@ -332,6 +347,12 @@ class Game:
     # ----------------------------------------------------------------
     def _draw(self):
         self.screen.fill(C_BG)
+
+        # メニュー返報確認ダイアログ（最前面）
+        if self.confirm_menu:
+            self._draw_confirm_menu()
+            pygame.display.flip()
+            return
 
         # リセット確認ダイアログ（最前面）
         if self.confirm_reset:
@@ -563,17 +584,9 @@ class Game:
         pygame.draw.rect(self.screen, pp_color, (SCREEN_W // 2 - 280, 348, bar_w, 14),
                          border_radius=4)
 
-        # ---- リセットボタン ----
-        rx = SCREEN_W // 2 - 120
-        ry = 420
-        pygame.draw.rect(self.screen, (60, 10, 10), (rx, ry, 240, 50), border_radius=8)
-        pygame.draw.rect(self.screen, (220, 50, 50), (rx, ry, 240, 50), 2, border_radius=8)
-        rt = font_m.render("R: Reset All Progress", True, (220, 100, 100))
-        self.screen.blit(rt, (rx + 120 - rt.get_width() // 2, ry + 14))
-
         # ---- 開始ボタン ----
         st = font_l.render("Enter / Space: START", True, (50, 220, 150))
-        self.screen.blit(st, (SCREEN_W // 2 - st.get_width() // 2, 500))
+        self.screen.blit(st, (SCREEN_W // 2 - st.get_width() // 2, 420))
 
         hint = font_s.render("ESC / M: Back to Menu", True, C_GRAY)
         self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 30))
@@ -581,6 +594,37 @@ class Game:
         # リセット確認
         if self.confirm_reset:
             self._draw_confirm_reset()
+
+    def _draw_confirm_menu(self):
+        """メニュー返報確認ダイアログ。GA進行中にMキーを押したときに表示。"""
+        font_m = self.renderer.font_m
+        font_s = self.renderer.font_s
+
+        ov = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+        ov.fill((0, 0, 0, 180))
+        self.screen.blit(ov, (0, 0))
+
+        bx, by, bw, bh = SCREEN_W // 2 - 260, SCREEN_H // 2 - 80, 520, 160
+        pygame.draw.rect(self.screen, (10, 15, 25), (bx, by, bw, bh), border_radius=10)
+        pygame.draw.rect(self.screen, (255, 160, 30), (bx, by, bw, bh), 2, border_radius=10)
+
+        t1 = font_m.render("メニューに戻りますか？", True, (255, 180, 50))
+        self.screen.blit(t1, (SCREEN_W // 2 - t1.get_width() // 2, by + 18))
+
+        t2 = font_s.render(
+            f"Gen {self.ga.generation} までの学習データは保持されます。",
+            True, C_GRAY)
+        self.screen.blit(t2, (SCREEN_W // 2 - t2.get_width() // 2, by + 52))
+
+        t3 = font_s.render(
+            "（再度 [2] または [3] で再開できます）",
+            True, (120, 120, 140))
+        self.screen.blit(t3, (SCREEN_W // 2 - t3.get_width() // 2, by + 74))
+
+        ty = font_m.render("[Y] はい", True, (255, 160, 30))
+        tn = font_m.render("[N] キャンセル", True, (80, 180, 80))
+        self.screen.blit(ty, (SCREEN_W // 2 - 180, by + 108))
+        self.screen.blit(tn, (SCREEN_W // 2 + 20, by + 108))
 
     def _draw_confirm_reset(self):
         """リセット確認ダイアログ。"""
