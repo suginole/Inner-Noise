@@ -162,35 +162,32 @@ class Car:
         ]
 
         # ---- 視野レイ（餌探索用） ----
-        # 進行方向を中心に ±VISION_ANGLE_DEG の範囲をスキャン
         ray_obs = []
         facing_rad = math.radians(self.angle)
         half_fov   = math.radians(VISION_ANGLE_DEG)
         n_rays     = VISION_RAYS
+        vision_range_sq = VISION_RANGE * VISION_RANGE  # 平方距離で事前フィルタ
+
+        # 視野内の餌だけ事前フィルタ（平方距離で高速化）
+        nearby_foods = []
+        px, py = self.pos.x, self.pos.y
+        for food in field.foods:
+            dx = food.x - px
+            dy = food.y - py
+            if dx * dx + dy * dy <= vision_range_sq:
+                nearby_foods.append((food, dx, dy, math.atan2(dy, dx)))
+
+        ray_half_width = (half_fov / max(1, n_rays - 1) + 0.15) if n_rays > 1 else half_fov
 
         for i in range(n_rays):
-            # レイの角度（左端から右端へ等間隔）
-            if n_rays > 1:
-                t = i / (n_rays - 1)   # 0～1
-            else:
-                t = 0.5
+            t = i / (n_rays - 1) if n_rays > 1 else 0.5
             ray_angle = facing_rad + half_fov * (2 * t - 1)
-            ray_dx = math.cos(ray_angle)
-            ray_dy = math.sin(ray_angle)
 
-            # このレイ方向に最も近い餌を探す
             best_signal = 0.0
-            for food in field.foods:
-                fvec = food - self.pos
-                dist = fvec.length()
-                if dist <= 0 or dist > VISION_RANGE:
-                    continue
-                # 餌の方向とレイ方向の角度差
-                food_angle = math.atan2(fvec.y, fvec.x)
+            for food, dx, dy, food_angle in nearby_foods:
                 diff = abs(_angle_diff(food_angle, ray_angle))
-                # 視野角内（レイ間隔の半分以内）に入っているか
-                ray_half_width = half_fov / max(1, n_rays - 1) if n_rays > 1 else half_fov
-                if diff < ray_half_width + 0.15:   # 少しマージンを持たせる
+                if diff < ray_half_width:
+                    dist = math.sqrt(dx * dx + dy * dy)
                     signal = 1.0 - dist / VISION_RANGE
                     if signal > best_signal:
                         best_signal = signal

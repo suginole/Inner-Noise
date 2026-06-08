@@ -16,6 +16,10 @@ class Renderer:
         self.font_m = pygame.font.SysFont("monospace", 15, bold=True)
         self.font_l = pygame.font.SysFont("monospace", 22, bold=True)
         self._field_surf_cache = None
+        # ---- パフォーマンス用キャッシュ ----
+        self._minimap_surf: pygame.Surface | None = None  # ミニマップ地形（静的、一度だけ生成）
+        self._cone_surf: pygame.Surface | None = None     # 視野コーン（サイズ固定、毎フレーム再利用）
+        self._goal_label = None   # 初回レンダリング後にキャッシュ
 
     # ----------------------------------------------------------------
     def calc_camera(self, car_pos: pygame.Vector2) -> pygame.Vector2:
@@ -28,26 +32,29 @@ class Renderer:
 
     # ----------------------------------------------------------------
     def draw_vision_cone(self, car, cam: pygame.Vector2):
-        """車の視野コーン（±45度 / VISION_RANGE）を半透明で描画する。"""
-        import math
+        """車の視野コーン（±45度 / VISION_RANGE）を半透明で描画する。
+        SRCALPHA Surfaceは一度だけ生成して再利用する。
+        """
+        if self._cone_surf is None:
+            self._cone_surf = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+
         sx = int(car.pos.x - cam.x)
         sy = int(car.pos.y - cam.y)
         facing_rad = math.radians(car.angle)
         half_fov   = math.radians(VISION_ANGLE_DEG)
         r          = int(VISION_RANGE)
 
-        # 扇形の頂点リスト
         pts = [(sx, sy)]
-        steps = 12
+        steps = 10   # 12→10に削減
         for i in range(steps + 1):
             t = i / steps
             a = facing_rad + half_fov * (2 * t - 1)
             pts.append((sx + math.cos(a) * r, sy + math.sin(a) * r))
 
-        cone_surf = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
-        pygame.draw.polygon(cone_surf, (255, 220, 50, 30), pts)
-        pygame.draw.polygon(cone_surf, (255, 220, 50, 60), pts, 1)
-        self.screen.blit(cone_surf, (0, 0))
+        self._cone_surf.fill((0, 0, 0, 0))   # クリア（全透明）
+        pygame.draw.polygon(self._cone_surf, (255, 220, 50, 28), pts)
+        pygame.draw.polygon(self._cone_surf, (255, 220, 50, 55), pts, 1)
+        self.screen.blit(self._cone_surf, (0, 0))
 
     def draw_field(self, field, cam: pygame.Vector2):
         """地形・餌・ゴールを描画する。"""
@@ -55,12 +62,13 @@ class Renderer:
         surf = field.get_surface()
         self.screen.blit(surf, (-cam.x, -cam.y))
 
-        # ゴール
+        # ゴール（ラベルはキャッシュ）
         gx = int(field.goal_pos[0] - cam.x)
         gy = int(field.goal_pos[1] - cam.y)
         pygame.draw.circle(self.screen, C_GOAL, (gx, gy), GOAL_RADIUS, 3)
-        label = self.font_m.render("GOAL", True, C_GOAL)
-        self.screen.blit(label, (gx - 20, gy - 30))
+        if self._goal_label is None:
+            self._goal_label = self.font_m.render("GOAL", True, C_GOAL)
+        self.screen.blit(self._goal_label, (gx - 20, gy - 30))
 
         # スタート
         sx = int(field.start_pos[0] - cam.x)
@@ -79,30 +87,35 @@ class Renderer:
     def draw_minimap(self, field, car_pos: pygame.Vector2,
                      goal_pos: tuple, x: int = 20, y: int = 20,
                      w: int = 160, h: int = 160):
-        """右上にミニマップを描画する。"""
+        """右上にミニマップを描画する。地形部分はキャッシュする。"""
         mx = SCREEN_W - w - x
         my = y
-        bg = pygame.Surface((w, h), pygame.SRCALPHA)
-        bg.fill((10, 12, 20, 200))
-        self.screen.blit(bg, (mx, my))
+
+        # 地形キャッシュ（初回のみ生成）
+        if self._minimap_surf is None:
+            self._minimap_surf = pygame.Surface((w, h))
+            self._minimap_surf.fill((10, 12, 20))
+            scale_x = w / WORLD_W
+            scale_y = h / WORLD_H
+            step = max(1, WORLD_W // (w * 2))
+            for gy_i in range(0, field.hmap.shape[0], step):
+                for gx_i in range(0, field.hmap.shape[1], step):
+                    hv = float(field.hmap[gy_i, gx_i])
+                    px = int(gx_i * TILE * scale_x)
+                    py = int(gy_i * TILE * scale_y)
+                    if hv >= MOUNTAIN_THRESHOLD:
+                        c = C_MOUNTAIN
+                    elif hv <= VALLEY_THRESHOLD:
+                        c = C_VALLEY
+                    else:
+                        c = C_PLAIN
+                    pygame.draw.rect(self._minimap_surf, c, (px, py, 2, 2))
+
+        self.screen.blit(self._minimap_surf, (mx, my))
         pygame.draw.rect(self.screen, C_GRAY, (mx, my, w, h), 1)
 
-        # 地形（ダウンサンプル）
         scale_x = w / WORLD_W
         scale_y = h / WORLD_H
-        step = max(1, WORLD_W // (w * 2))
-        for gy_i in range(0, field.hmap.shape[0], step):
-            for gx_i in range(0, field.hmap.shape[1], step):
-                hv = float(field.hmap[gy_i, gx_i])
-                px = int(mx + gx_i * TILE * scale_x)
-                py = int(my + gy_i * TILE * scale_y)
-                if hv >= MOUNTAIN_THRESHOLD:
-                    c = C_MOUNTAIN
-                elif hv <= VALLEY_THRESHOLD:
-                    c = C_VALLEY
-                else:
-                    c = C_PLAIN
-                pygame.draw.rect(self.screen, c, (px, py, 2, 2))
 
         # 餌
         for food in field.foods:
