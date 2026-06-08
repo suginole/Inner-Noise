@@ -73,12 +73,11 @@ PENALTY_FALL       = -10.0
 COMPLEXITY_ALPHA   = 0.1      # NEATノード/エッジペナルティ係数
 
 # ---- GA ----
-GA_POP_SIZE        = 30       # 個体数
-GA_GENOME_DIM      = 16       # シンプルGAのゲノム次元（重みベクトル）
-GA_ELITE           = 4        # エリート個体数
+GA_POP_SIZE        = 100      # 個体数
+GA_ELITE           = 8        # エリート個体数
 GA_MUTATION_RATE   = 0.15
 GA_MUTATION_STD    = 0.3
-GA_EPISODE_FRAMES  = 60 * 30  # 1エピソードの最大フレーム数 (30秒)
+GA_EPISODE_FRAMES  = 60 * 20  # 1エピソードの最大フレーム数 (20秒)
 
 # ---- カラーパレット ----
 C_BG           = (10,  12,  20)

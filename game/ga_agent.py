@@ -1,20 +1,15 @@
 """
-ga_agent.py — 本格的なGA（遺伝的アルゴリズム）エージェント
+ga_agent.py — GA（遠伝的アルゴリズム）エージェント
 
-設計:
-  - GAGenome: 3層NN（入力→隠れ→隠れ→出力）
-  - GeneticAlgorithm: エリート選択・トーナメント・交叉・適応的突然変異・種分化
-  - ボトルネックモジュールを経由（将来のRNN差し替え口を維持）
-
-将来: GAGenomeの内部をRNN+NEATに差し替える。
+現在のフェーズ: GAによるゲーム攻略可能性の検証。
+ボトルネックは使用しない。
+将来: RNN-GAフェーズでボトルネックを導入する。
 """
-import math
 import random
 import numpy as np
 from game.agent import Agent
 from game.car import Car
 from game.field import Field
-from game.bottleneck import Bottleneck
 from config import *
 
 # 観測ベクトルの全次元 = 基本6 + 視野VISION_RAYS
@@ -42,7 +37,6 @@ class GAGenome:
         self.b2   = np.zeros(self.H2)
         self.W3   = np.array([[rng.gauss(0, s) for _ in range(self.H2)] for _ in range(3)])
         self.b3   = np.zeros(3)
-        self.bn_w = np.array([[rng.gauss(0, s) for _ in range(4)] for _ in range(3)])
 
         self.fitness: float = 0.0
         self.species_id: int = -1
@@ -72,7 +66,6 @@ class GAGenome:
             self.W1.ravel(), self.b1,
             self.W2.ravel(), self.b2,
             self.W3.ravel(), self.b3,
-            self.bn_w.ravel(),
         ])
 
     @staticmethod
@@ -94,7 +87,6 @@ class GAGenome:
         g.b2   = take(GAGenome.H2)
         g.W3   = take(3 * GAGenome.H2).reshape(3, GAGenome.H2)
         g.b3   = take(3)
-        g.bn_w = take(3 * 4).reshape(3, 4)
         return g
 
     # ----------------------------------------------------------------
@@ -311,28 +303,15 @@ class GeneticAlgorithm:
 
 # ================================================================
 class GAAgent(Agent):
-    """GAゲノムを使って行動するエージェント。"""
+    """ゲノムを使って行動するエージェント。
+    現在はボトルネックなし。毎フレーム forward() で直接行動を決定。
+    """
 
     def __init__(self, car: Car, field: Field, genome: GAGenome):
         super().__init__(car, field)
-        self.genome     = genome
-        self.bottleneck = Bottleneck(weights=genome.bn_w)
+        self.genome = genome
 
     def act(self) -> tuple[float, float, float]:
-        obs = self.car.get_observation(self.field)
-        self.bottleneck.push(obs)
-        dt = 1.0 / FPS
-        pulse, mode = self.bottleneck.tick(dt)
-
-        if mode == "speak":
-            action = self.bottleneck.get_action()
-            self.genome.last_output_act = list(action)
-        else:
-            action = self.genome.forward(obs)
-
-        self.genome._last_bn_pulse = self.bottleneck.get_current_pulse()
+        obs    = self.car.get_observation(self.field)
+        action = self.genome.forward(obs)
         return tuple(max(0.0, min(1.0, v)) for v in action[:3])
-
-    def reset(self):
-        super().reset()
-        self.bottleneck.reset()

@@ -47,7 +47,6 @@ class Game:
         # GAモード
         self.ga:           GeneticAlgorithm | None = None
         self.ga_agents:    list[GAAgent] = []
-        self.ga_idx:       int = 0
         self.ga_frame:     int = 0
         self.ga_running:   bool = False
 
@@ -67,7 +66,6 @@ class Game:
         self.field      = Field(terrain_seed=42, food_episode=0)
         self.ga         = GeneticAlgorithm(pop_size=GA_POP_SIZE, seed=0)
         self._spawn_ga_agents()
-        self.ga_idx     = 0
         self.ga_frame   = 0
         self.ga_running = True
         self.done_message = ""
@@ -135,11 +133,6 @@ class Game:
                 self.done_timer -= 1
             return
 
-        # ボトルネック経由（観察用）
-        obs = self.player_car.get_observation(self.field)
-        self.player_bn.push(obs)
-        self.player_bn.tick(dt)
-
         # プレイヤーの行動
         result = self.player_agent.step()
 
@@ -152,38 +145,64 @@ class Game:
 
     # ----------------------------------------------------------------
     def _update_ga(self, dt: float):
+        """全エージェントを同時に1フレーム進める。全員終了で世代進化。"""
         if not self.ga_running:
             return
 
-        agent = self.ga_agents[self.ga_idx]
-        car   = agent.car
-
-        # エピソード終了判定
-        if not car.alive or self.ga_frame >= GA_EPISODE_FRAMES:
-            # 適応度を記録
-            agent.genome.fitness = agent.total_reward
-            self._ga_next_agent()
-            return
-
-        result = agent.step()
         self.ga_frame += 1
+        all_done = True
 
-        if result["done"]:
-            agent.genome.fitness = agent.total_reward
-            self._ga_next_agent()
+        for agent in self.ga_agents:
+            if not agent.car.alive:
+                continue   # 既に終了済み
+            all_done = False
 
-    def _ga_next_agent(self):
-        """次のエージェントへ進む。全員終わったら進化。"""
-        self.ga_idx   += 1
-        self.ga_frame  = 0
+            result = agent.step()
+            if result["done"] or self.ga_frame >= GA_EPISODE_FRAMES:
+                agent.genome.fitness = agent.total_reward
+                agent.car.alive = False   # 終了フラグ
 
-        if self.ga_idx >= len(self.ga_agents):
-            # 世代進化
+        # 全員終了 → 世代進化
+        if all_done or self.ga_frame >= GA_EPISODE_FRAMES:
+            # まだ生きているエージェントの適応度を確定
+            for agent in self.ga_agents:
+                if agent.car.alive:
+                    agent.genome.fitness = agent.total_reward
             self.ga.evolve()
-            # 地形は完全固定、餌のみ世代番号で再配置
             self.field.reset_foods(food_episode=self.ga.generation)
             self._spawn_ga_agents()
-            self.ga_idx = 0
+            self.ga_frame = 0
+
+    # ----------------------------------------------------------------
+    def _draw_ga_overlay(self, alive_count: int, best_agent):
+        """GAモードのオーバーレイHUDを描画する。"""
+        stats = self.ga.get_stats()
+        font  = self.renderer.font_s
+        font_m = self.renderer.font_m
+        x, y  = 20, 20
+        bg = pygame.Surface((260, 100), pygame.SRCALPHA)
+        bg.fill((10, 12, 20, 200))
+        self.screen.blit(bg, (x, y))
+        pygame.draw.rect(self.screen, (194, 24, 91), (x, y, 260, 100), 1)
+        lines = [
+            f"Gen: {stats['generation']:4d}   Pop: {self.ga.pop_size}",
+            f"Alive: {alive_count:3d} / {self.ga.pop_size}",
+            f"Best:  {stats['best']:8.1f}",
+            f"Avg:   {stats['avg']:8.1f}",
+            f"Species: {stats.get('species','-'):3}  "
+            f"Mut: {stats.get('mut_rate',0):.3f}",
+        ]
+        for i, line in enumerate(lines):
+            t = font.render(line, True, (244, 143, 177))
+            self.screen.blit(t, (x + 6, y + 6 + i * 18))
+
+        # フレーム進捗バー
+        bar_y = y + 100 + 4
+        prog  = min(1.0, self.ga_frame / GA_EPISODE_FRAMES)
+        pygame.draw.rect(self.screen, (30, 30, 40), (x, bar_y, 260, 8))
+        pygame.draw.rect(self.screen, (100, 200, 100), (x, bar_y, int(260 * prog), 8))
+        t = font.render(f"Episode: {self.ga_frame}/{GA_EPISODE_FRAMES}f", True, C_GRAY)
+        self.screen.blit(t, (x, bar_y + 10))
 
     # ----------------------------------------------------------------
     def _draw(self):
@@ -204,7 +223,7 @@ class Game:
             self.player_car.draw(self.screen, cam, color=C_CAR)
             self.renderer.draw_minimap(
                 self.field, self.player_car.pos, self.field.goal_pos)
-            self.renderer.draw_hud_player(self.player_car, self.player_bn)
+            self.renderer.draw_hud_player(self.player_car, None)
             if self.done_message:
                 color = C_GOAL if self.done_message == "GOAL!" else C_ENERGY_LO
                 self.renderer.draw_overlay(self.done_message, color)
@@ -217,39 +236,54 @@ class Game:
             self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 20))
 
         elif self.state == GameState.GA:
-            if self.ga_idx < len(self.ga_agents):
-                agent = self.ga_agents[self.ga_idx]
-                cam   = self.renderer.calc_camera(agent.car.pos)
-                self.renderer.draw_field(self.field, cam)   # 静的バッファを初回生成
-                if self.renderer._minimap_surf is None and self.renderer._static_buf is not None:
-                    from pygame import transform
-                    self.renderer._minimap_surf = transform.scale(
-                        self.renderer._static_buf, (160, 160))
-                # 全エージェントの車を薄く描画
-                for i, ag in enumerate(self.ga_agents):
-                    if i == self.ga_idx:
-                        continue
-                    ag.car.draw(self.screen, cam,
-                                color=(40, 80, 120))
-                # 現在のエージェントの視野コーンと車を強調
-                self.renderer.draw_vision_cone(agent.car, cam)
-                agent.car.draw(self.screen, cam, color=C_CAR_GA)
-                self.renderer.draw_minimap(
-                    self.field, agent.car.pos, self.field.goal_pos)
-                self.renderer.draw_hud_ga(
-                    agent.car, self.ga,
-                    bottleneck=agent.bottleneck,
-                    agent_idx=self.ga_idx,
-                    total=len(self.ga_agents))
-                self.renderer.draw_fitness_graph(
-                    self.ga, 20, 110, w=260, h=80)
-                # アクティベーションパネル（画面右下）
+            # 生存中のエージェントの重心にカメラを合わせる
+            alive_agents = [ag for ag in self.ga_agents if ag.car.alive]
+            if alive_agents:
+                cx = sum(ag.car.pos.x for ag in alive_agents) / len(alive_agents)
+                cy = sum(ag.car.pos.y for ag in alive_agents) / len(alive_agents)
+                focus = pygame.Vector2(cx, cy)
+            else:
+                focus = pygame.Vector2(self.field.start_pos)
+            cam = self.renderer.calc_camera(focus)
+
+            self.renderer.draw_field(self.field, cam)
+            if self.renderer._minimap_surf is None and self.renderer._static_buf is not None:
+                from pygame import transform
+                self.renderer._minimap_surf = transform.scale(
+                    self.renderer._static_buf, (160, 160))
+
+            # 全エージェントを一括描画
+            alive_count = 0
+            best_agent  = None
+            for ag in self.ga_agents:
+                if not ag.car.alive:
+                    continue
+                alive_count += 1
+                # 最高報酬のエージェントを強調表示用に記録
+                if best_agent is None or ag.total_reward > best_agent.total_reward:
+                    best_agent = ag
+                ag.car.draw(self.screen, cam, color=(40, 100, 160))
+
+            # 最高報酬エージェントを金色で強調
+            if best_agent:
+                self.renderer.draw_vision_cone(best_agent.car, cam)
+                best_agent.car.draw(self.screen, cam, color=(255, 200, 50))
+
+            self.renderer.draw_minimap(
+                self.field, focus, self.field.goal_pos)
+
+            # HUD: 生存数・世代・適応度
+            self._draw_ga_overlay(alive_count, best_agent)
+            self.renderer.draw_fitness_graph(
+                self.ga, 20, 130, w=260, h=100)
+            if best_agent:
                 self.renderer.draw_activation_panel(
-                    agent.genome,
+                    best_agent.genome,
                     x=SCREEN_W - 430,
                     y=SCREEN_H - 210)
-                hint = self.renderer.font_s.render("M: Menu  R: Reset  SPACE: Skip  ESC: Quit", True, C_GRAY)
-                self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 20))
+            hint = self.renderer.font_s.render(
+                "M: Menu  R: Reset  ESC: Quit", True, C_GRAY)
+            self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 20))
 
 
 # ================================================================
