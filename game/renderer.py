@@ -295,8 +295,9 @@ class Renderer:
         self.screen.blit(sub, (SCREEN_W // 2 - sub.get_width() // 2, 220))
 
         options = [
-            ("1", "PLAYER MODE",  "キーボードで車を直接操作する",         C_CAR),
-            ("2", "GA MODE",      "遺伝的アルゴリズムの学習を観察する",   C_CAR_GA),
+            ("1", "PLAYER MODE",     "キーボードで車を直接操作する",                   C_CAR),
+            ("2", "GA MODE",         "遠伝的アルゴリズムの学習を観察する",             C_CAR_GA),
+            ("3", "FAST LEARN MODE", "描画スキップの高速学習モード（Tabで監視切替）", (255, 200, 50)),
         ]
         for i, (key, name, desc, color) in enumerate(options):
             oy = 320 + i * 100
