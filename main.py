@@ -158,16 +158,12 @@ class Game:
             all_done = False
 
             result = agent.step()
-            if result["done"] or self.ga_frame >= GA_EPISODE_FRAMES:
+            if result["done"]:
                 agent.genome.fitness = agent.total_reward
-                agent.car.alive = False   # 終了フラグ
+                agent.car.alive = False
 
-        # 全員終了 → 世代進化
-        if all_done or self.ga_frame >= GA_EPISODE_FRAMES:
-            # まだ生きているエージェントの適応度を確定
-            for agent in self.ga_agents:
-                if agent.car.alive:
-                    agent.genome.fitness = agent.total_reward
+        # 全員餐死で世代進化（時間制限なし）
+        if all_done:
             self.ga.evolve()
             self.field.reset_foods(food_episode=self.ga.generation)
             self._spawn_ga_agents()
@@ -196,13 +192,10 @@ class Game:
             t = font.render(line, True, (244, 143, 177))
             self.screen.blit(t, (x + 6, y + 6 + i * 18))
 
-        # フレーム進捗バー
+        # フレームカウンタ
         bar_y = y + 100 + 4
-        prog  = min(1.0, self.ga_frame / GA_EPISODE_FRAMES)
-        pygame.draw.rect(self.screen, (30, 30, 40), (x, bar_y, 260, 8))
-        pygame.draw.rect(self.screen, (100, 200, 100), (x, bar_y, int(260 * prog), 8))
-        t = font.render(f"Episode: {self.ga_frame}/{GA_EPISODE_FRAMES}f", True, C_GRAY)
-        self.screen.blit(t, (x, bar_y + 10))
+        t = font.render(f"Frame: {self.ga_frame}  (no time limit)", True, C_GRAY)
+        self.screen.blit(t, (x, bar_y))
 
     # ----------------------------------------------------------------
     def _draw(self):

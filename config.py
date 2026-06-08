@@ -73,11 +73,11 @@ PENALTY_FALL       = -10.0
 COMPLEXITY_ALPHA   = 0.1      # NEATノード/エッジペナルティ係数
 
 # ---- GA ----
-GA_POP_SIZE        = 100      # 個体数
-GA_ELITE           = 8        # エリート個体数
+GA_POP_SIZE        = 500      # 個体数
+GA_ELITE           = 20       # エリート個体数
 GA_MUTATION_RATE   = 0.15
 GA_MUTATION_STD    = 0.3
-GA_EPISODE_FRAMES  = 60 * 20  # 1エピソードの最大フレーム数 (20秒)
+GA_EPISODE_FRAMES  = 0        # 0 = 時間制限なし（全員餐死まで）
 
 # ---- カラーパレット ----
 C_BG           = (10,  12,  20)
