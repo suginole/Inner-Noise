@@ -12,8 +12,8 @@ from game.car import Car
 from game.field import Field
 from config import *
 
-# 観測ベクトルの全次元 = 基本6 + 視野VISION_RAYS
-OBS_DIM = 6 + VISION_RAYS
+# 観測ベクトルの全次元 = 基本6 + 視野VISION_RAYS + 弁別視野1
+OBS_DIM = 6 + VISION_RAYS + 1
 
 
 # ================================================================

@@ -44,6 +44,7 @@ IDLE_SPEED_THRESH  = 0.3      # この速度以下を「停滞」とみなす
 VISION_ANGLE_DEG   = 45.0     # 視野角（片側）
 VISION_RANGE       = WORLD_W / 10  # 視野距離 = マップ幅の1/10 = 400px
 VISION_RAYS        = 5        # 視野内のレイ数（観測ベクトルの次元に影響）
+FOCUS_RANGE        = 400.0    # 弁別視野（視線中央線上）の距離 (px)
 
 # ---- 餌 ----
 FOOD_COUNT         = 80       # フィールド上の餌の総数
@@ -68,6 +69,8 @@ REWARD_GOAL        = 1000.0
 REWARD_FOOD        = 5.0
 REWARD_FOOD_HI     = 20.0     # 高級餌（山の上）の報酬
 REWARD_GOAL_STEP   = 0.01     # ゴールに近づくごとの微小報酬
+REWARD_MOVE        = 0.003    # 毎フレームの前進報酬（速度に比例）
+REWARD_SURVIVE     = 0.002    # 毎フレームの生存報酬
 PENALTY_DEATH      = -500.0
 PENALTY_FALL       = -10.0
 COMPLEXITY_ALPHA   = 0.1      # NEATノード/エッジペナルティ係数

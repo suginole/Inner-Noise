@@ -109,6 +109,13 @@ class Car:
             reward += rwd
             field.respawn_food()
 
+        # ---- 前進報酬（正の速度に比例） ----
+        if self.speed > 0:
+            reward += self.speed * REWARD_MOVE
+
+        # ---- 生存報酬 ----
+        reward += REWARD_SURVIVE
+
         # ---- ゴール判定 ----
         gvec = pygame.Vector2(field.goal_pos)
         self.dist_to_goal = self.pos.distance_to(gvec)
@@ -198,7 +205,24 @@ class Car:
                         best_signal = signal
             ray_obs.append(best_signal)
 
-        return base_obs + ray_obs
+        # ---- 弁別視野（視線中央線上、FOCUS_RANGE以内に餌があるか） ----
+        # 弁別角度：視野レイ間隔の半分より細かい中央線
+        focus_half = math.radians(4.0)   # 中央線から±4度以内
+        focus_range_sq = FOCUS_RANGE * FOCUS_RANGE
+        focus_signal = 0.0
+        for food_pos, _ in field.foods:
+            dx = food_pos.x - px
+            dy = food_pos.y - py
+            dsq = dx * dx + dy * dy
+            if dsq <= focus_range_sq and dsq > 0:
+                food_angle = math.atan2(dy, dx)
+                diff = abs(_angle_diff(food_angle, facing_rad))
+                if diff < focus_half:
+                    sig = 1.0 - math.sqrt(dsq) / FOCUS_RANGE
+                    if sig > focus_signal:
+                        focus_signal = sig
+
+        return base_obs + ray_obs + [focus_signal]
 
     # ----------------------------------------------------------------
     def reset(self, x: float, y: float, angle: float = 0.0):

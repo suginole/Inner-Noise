@@ -487,7 +487,8 @@ class Renderer:
             ("GRAD Y",      "Gy", (255, 140, 60)),
             ("FOOD DX",     "Fx", (255, 220, 50)),
             ("FOOD DY",     "Fy", (255, 200, 30)),
-        ] + [(f"RAY {i}", f"R{i}", (200, 200, 80)) for i in range(len(obs) - 6)]
+        ] + [(f"RAY {i}", f"R{i}", (200, 200, 80)) for i in range(VISION_RAYS)] + \
+            [("FOCUS", "Fc", (255, 160, 60))]
 
         bar_x   = x + 60
         bar_w   = W_PANEL - 70
