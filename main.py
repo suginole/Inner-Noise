@@ -272,8 +272,8 @@ class Game:
             if best_agent:
                 self.renderer.draw_activation_panel(
                     best_agent.genome,
-                    x=SCREEN_W - 430,
-                    y=SCREEN_H - 210)
+                    x=SCREEN_W - 510,
+                    y=SCREEN_H - 230)
             hint = self.renderer.font_s.render(
                 "M: Menu  R: Reset  ESC: Quit", True, C_GRAY)
             self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 20))

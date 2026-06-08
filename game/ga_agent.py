@@ -42,10 +42,11 @@ class GAGenome:
         self.species_id: int = -1
 
         # アクティベーション記録（可視化用）
-        self.last_input_act:  list[float] = [0.0] * OBS_DIM
-        self.last_hidden_act: list[float] = [0.0] * self.H1   # 第1隠れ層を表示
-        self.last_output_act: list[float] = [0.5, 0.5, 0.0]
-        self._last_bn_pulse:  list[int]   = [0, 0, 0, 0]
+        self.last_input_act:   list[float] = [0.0] * OBS_DIM
+        self.last_hidden_act:  list[float] = [0.0] * self.H1
+        self.last_hidden2_act: list[float] = [0.0] * self.H2
+        self.last_output_act:  list[float] = [0.5, 0.5, 0.0]
+        self._last_bn_pulse:   list[int]   = [0, 0, 0, 0]
 
     # ----------------------------------------------------------------
     def forward(self, obs: list[float]) -> list[float]:
@@ -54,9 +55,10 @@ class GAGenome:
         h2 = np.tanh(self.W2 @ h1 + self.b2)
         out = 1.0 / (1.0 + np.exp(-(self.W3 @ h2 + self.b3)))
 
-        self.last_input_act  = x.tolist()
-        self.last_hidden_act = h1.tolist()
-        self.last_output_act = out.tolist()
+        self.last_input_act   = x.tolist()
+        self.last_hidden_act  = h1.tolist()   # 隠れ層1
+        self.last_hidden2_act = h2.tolist()   # 隠れ層2
+        self.last_output_act  = out.tolist()
         return out.tolist()
 
     # ----------------------------------------------------------------
@@ -73,10 +75,11 @@ class GAGenome:
         g = GAGenome.__new__(GAGenome)
         g.fitness = 0.0
         g.species_id = -1
-        g.last_input_act  = [0.0] * OBS_DIM
-        g.last_hidden_act = [0.0] * GAGenome.H1
-        g.last_output_act = [0.5, 0.5, 0.0]
-        g._last_bn_pulse  = [0, 0, 0, 0]
+        g.last_input_act   = [0.0] * OBS_DIM
+        g.last_hidden_act  = [0.0] * GAGenome.H1
+        g.last_hidden2_act = [0.0] * GAGenome.H2
+        g.last_output_act  = [0.5, 0.5, 0.0]
+        g._last_bn_pulse   = [0, 0, 0, 0]
         i = 0
         def take(n):
             nonlocal i
