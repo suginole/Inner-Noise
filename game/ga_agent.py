@@ -47,18 +47,17 @@ class GAGenome:
         self.species_id: int   = -1
 
         # アクティベーション記録（可視化用）
-        # 感覚GRU（16ユニット）
-        self.last_sensory_gru: list[float] = [0.0] * SENSORY_GRU_DIM
-        # 運動GRU（16ユニット）
-        self.last_motor_gru:   list[float] = [0.0] * MOTOR_GRU_DIM
-        # 出力（3次元）
-        self.last_output_act:  list[float] = [0.5, 0.5, 0.0]
-        # 入力（12次元）
-        self.last_input_act:   list[float] = [0.0] * OBS_DIM
-        # 感覚皮質（16ユニット）
-        self.last_hidden_act:  list[float] = [0.0] * SENSORY_CORTEX_DIM
-        # 感覚GRU（H2として扱う）
-        self.last_hidden2_act: list[float] = [0.0] * SENSORY_GRU_DIM
+        self.last_input_act:        list[float] = [0.0] * OBS_DIM
+        self.last_cortex_act:       list[float] = [0.0] * SENSORY_CORTEX_DIM  # 感覚皮質FF
+        self.last_sensory_gru:      list[float] = [0.0] * SENSORY_GRU_DIM     # 感覚 GRU
+        self.last_pulse_act:        list[int]   = [0, 0]                       # パルス符号化FF後
+        self.last_embed_act:        list[float] = [0.0] * MOTOR_EMBED_DIM     # パルス埋め込みFF
+        self.last_motor_gru:        list[float] = [0.0] * MOTOR_GRU_DIM       # 運動 GRU
+        self.last_motor_cortex_act: list[float] = [0.0] * MOTOR_CORTEX_DIM   # 運動皮質FF
+        self.last_output_act:       list[float] = [0.5, 0.5, 0.0]             # 出力
+        # 互換性維持用エイリアス
+        self.last_hidden_act:  list[float] = self.last_cortex_act
+        self.last_hidden2_act: list[float] = self.last_sensory_gru
 
     # ----------------------------------------------------------------
     def flat(self) -> np.ndarray:
@@ -73,12 +72,16 @@ class GAGenome:
         g = GAGenome.__new__(GAGenome)
         g.fitness    = 0.0
         g.species_id = -1
-        g.last_sensory_gru = [0.0] * SENSORY_GRU_DIM
-        g.last_motor_gru   = [0.0] * MOTOR_GRU_DIM
-        g.last_output_act  = [0.5, 0.5, 0.0]
-        g.last_input_act   = [0.0] * OBS_DIM
-        g.last_hidden_act  = [0.0] * SENSORY_CORTEX_DIM
-        g.last_hidden2_act = [0.0] * SENSORY_GRU_DIM
+        g.last_input_act        = [0.0] * OBS_DIM
+        g.last_cortex_act       = [0.0] * SENSORY_CORTEX_DIM
+        g.last_sensory_gru      = [0.0] * SENSORY_GRU_DIM
+        g.last_pulse_act        = [0, 0]
+        g.last_embed_act        = [0.0] * MOTOR_EMBED_DIM
+        g.last_motor_gru        = [0.0] * MOTOR_GRU_DIM
+        g.last_motor_cortex_act = [0.0] * MOTOR_CORTEX_DIM
+        g.last_output_act       = [0.5, 0.5, 0.0]
+        g.last_hidden_act  = g.last_cortex_act
+        g.last_hidden2_act = g.last_sensory_gru
 
         ss = SensoryNN.flat_size()
         g.sensory = SensoryNN.__new__(SensoryNN)
@@ -111,14 +114,19 @@ class GAGenome:
     def distance(self, other: "GAGenome") -> float:
         return float(np.linalg.norm(self.flat() - other.flat()))
 
-    def update_activations(self, bn: RNNBottleneck, obs: list[float]):
-        """RNNBottleneckのアクティベーションをゲノムに同期する（可視化用）。"""
-        self.last_input_act   = list(obs)
-        self.last_hidden_act  = list(bn.sensory.last_cortex_act)
-        self.last_hidden2_act = list(bn.last_sensory_gru)
-        self.last_sensory_gru = list(bn.last_sensory_gru)
-        self.last_motor_gru   = list(bn.last_motor_gru)
-        self.last_output_act  = list(bn.last_output)
+    def update_activations(self, bn, obs: list[float]):
+        """全層のアクティベーションをゲノムに同期する（可視化用）。"""
+        self.last_input_act        = list(obs)
+        self.last_cortex_act       = list(getattr(bn.sensory, 'last_cortex_act', [0.0]*SENSORY_CORTEX_DIM))
+        self.last_sensory_gru      = list(getattr(bn, 'last_sensory_gru', [0.0]*SENSORY_GRU_DIM))
+        self.last_pulse_act        = list(getattr(bn.sensory, 'last_pulse', [0, 0]))
+        self.last_embed_act        = list(getattr(bn.motor, 'last_embed_act', [0.0]*MOTOR_EMBED_DIM))
+        self.last_motor_gru        = list(getattr(bn, 'last_motor_gru', [0.0]*MOTOR_GRU_DIM))
+        self.last_motor_cortex_act = list(getattr(bn.motor, 'last_cortex_act', [0.0]*MOTOR_CORTEX_DIM))
+        self.last_output_act       = list(getattr(bn, 'last_output', [0.5, 0.5, 0.0]))
+        # エイリアスも更新
+        self.last_hidden_act  = self.last_cortex_act
+        self.last_hidden2_act = self.last_sensory_gru
 
 
 # ================================================================

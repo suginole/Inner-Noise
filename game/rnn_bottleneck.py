@@ -217,20 +217,23 @@ class MotorNN:
         self._h: np.ndarray = self.gamma_m.copy()
 
         # アクティベーション記録（可視化用）
+        self.last_embed_act:  list[float] = [0.0] * MOTOR_EMBED_DIM
         self.last_gru_act:    list[float] = [0.0] * MOTOR_GRU_DIM
+        self.last_cortex_act: list[float] = [0.0] * MOTOR_CORTEX_DIM
         self.last_output_act: list[float] = [0.5, 0.5, 0.0]
 
     def reset(self):
         self._h = self.gamma_m.copy()
 
     def forward(self, pulse: list[int]) -> list[float]:
-        """2bitsパルス → [Accel, Steer, Brake]（各0〜1）。"""
+        """パルス → [Accel, Steer, Brake]（し0～1）。"""
         x = np.array(pulse, dtype=np.float32)
 
         # パルス埋め込みFF
         embed = np.tanh(self.W_embed @ x + self.b_embed)
+        self.last_embed_act = embed.tolist()   # 可視化用
 
-        # 運動GRU
+        # 運動 GRU
         self._h = gru_step(embed, self._h,
                            self.Wz, self.Wr, self.Wh,
                            self.Uz, self.Ur, self.Uh,
@@ -239,6 +242,7 @@ class MotorNN:
 
         # 運動皮質FF
         cortex = np.tanh(self.W_cortex @ self._h + self.b_cortex)
+        self.last_cortex_act = cortex.tolist()   # 可視化用
 
         # 出力FF (sigmoid)
         def sigmoid(v): return 1.0 / (1.0 + np.exp(-np.clip(v, -20, 20)))
