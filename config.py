@@ -134,6 +134,10 @@ AUDIO_SAMPLE_RATE   = 22050   # Hz
 AUDIO_FRAME_MS      = 200     # ms（5Hzパルスに同期）
 AUDIO_FRAME_SAMPLES = int(AUDIO_SAMPLE_RATE * AUDIO_FRAME_MS / 1000)  # = 4410
 
+# S↔M方向別ピッチ係数
+PITCH_FACTOR_HIGH   = 1.4    # S→M（感覚→運動 / 傘聴ターン）: 高ピッチ
+PITCH_FACTOR_LOW    = 0.7    # M→S（運動→感覚 / 発話ターン）: 低ピッチ
+
 # F1/F2ベース母音分類閾値
 # 学術データ（Mokhtari & Tanaka 2000、日本語母音コーパス）に基づく
 #

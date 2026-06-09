@@ -135,15 +135,16 @@ class Bottleneck:
     def on_pulse_emit(self, bits2: int) -> None:
         """パルス送信時に呼ばれるフック（2bits）。
         audio_enabled=Trueの場合は PhonemeConverter.play() を呼び出す。
+        通信方向（_mode）に応じてピッチを変える。
         """
+        # 通信方向をピッチに変換
+        direction = 'S→M' if self._mode == 'listen' else 'M→S'
+        self._last_phoneme = PHONEME_TABLE.get(bits2 & 0x3, "")
         if self.audio_enabled and self.converter is not None:
             try:
-                self._last_phoneme = self.converter.pulse_to_phoneme(bits2)
-                self.converter.play(bits2)
+                self.converter.play(bits2, direction=direction)
             except Exception:
                 pass
-        else:
-            self._last_phoneme = PHONEME_TABLE.get(bits2 & 0x3, "")
 
     def on_pulse_receive(self, frame) -> int:
         """マイク入力時に呼ばれるフック。

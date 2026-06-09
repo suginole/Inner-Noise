@@ -375,11 +375,11 @@ class Renderer:
                 ts = int(time.time() * 5 - k) % 4
                 history.append([(ts >> i) & 1 for i in range(2)])
 
-        # モード表示
+        # モード表示（方向ラベル + 性別記号）
         mode_color = (100, 160, 220) if mode == "listen" else (100, 200, 120)
-        mode_lbl = self.font_s.render(
-            f"{'LISTEN S→M' if mode == 'listen' else 'SPEAK  M→S'}",
-            True, mode_color)
+        gender_sym = "♀" if mode == "listen" else "♂"   # S→M=高ピッチ♀ / M→S=低ピッチ♂
+        mode_str = f"LISTEN  S→M  {gender_sym}" if mode == "listen" else f"SPEAK   M→S  {gender_sym}"
+        mode_lbl = self.font_s.render(mode_str, True, mode_color)
         self.screen.blit(mode_lbl, (x + 4, y + 17))
 
         # ターン進捗バー
