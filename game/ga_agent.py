@@ -48,11 +48,13 @@ class GAGenome:
 
         # アクティベーション記録（可視化用）
         self.last_input_act:        list[float] = [0.0] * OBS_DIM
-        self.last_cortex_act:       list[float] = [0.0] * SENSORY_CORTEX_DIM  # 感覚皮質FF
+        self.last_cortex_act:       list[float] = [0.0] * SENSORY_FF_DIM      # 入力FF
         self.last_sensory_gru:      list[float] = [0.0] * SENSORY_GRU_DIM     # 感覚 GRU
+        self.last_sensory_integ:    list[float] = [0.0] * SENSORY_INTEG_DIM   # 統合FF
         self.last_pulse_act:        list[int]   = [0, 0]                       # パルス符号化FF後
         self.last_embed_act:        list[float] = [0.0] * MOTOR_EMBED_DIM     # パルス埋め込みFF
         self.last_motor_gru:        list[float] = [0.0] * MOTOR_GRU_DIM       # 運動 GRU
+        self.last_motor_integ:      list[float] = [0.0] * MOTOR_INTEG_DIM     # 統合FF
         self.last_motor_cortex_act: list[float] = [0.0] * MOTOR_CORTEX_DIM   # 運動皮質FF
         self.last_output_act:       list[float] = [0.5, 0.5, 0.0]             # 出力
         # 互換性維持用エイリアス
@@ -73,11 +75,13 @@ class GAGenome:
         g.fitness    = 0.0
         g.species_id = -1
         g.last_input_act        = [0.0] * OBS_DIM
-        g.last_cortex_act       = [0.0] * SENSORY_CORTEX_DIM
+        g.last_cortex_act       = [0.0] * SENSORY_FF_DIM
         g.last_sensory_gru      = [0.0] * SENSORY_GRU_DIM
+        g.last_sensory_integ    = [0.0] * SENSORY_INTEG_DIM
         g.last_pulse_act        = [0, 0]
         g.last_embed_act        = [0.0] * MOTOR_EMBED_DIM
         g.last_motor_gru        = [0.0] * MOTOR_GRU_DIM
+        g.last_motor_integ      = [0.0] * MOTOR_INTEG_DIM
         g.last_motor_cortex_act = [0.0] * MOTOR_CORTEX_DIM
         g.last_output_act       = [0.5, 0.5, 0.0]
         g.last_hidden_act  = g.last_cortex_act
@@ -85,17 +89,26 @@ class GAGenome:
 
         ss = SensoryNN.flat_size()
         g.sensory = SensoryNN.__new__(SensoryNN)
-        g.sensory.last_cortex_act = [0.0] * SENSORY_CORTEX_DIM
+        g.sensory.last_input_act  = [0.0] * SENSORY_FF_DIM
+        g.sensory.last_cortex_act = [0.0] * SENSORY_FF_DIM
         g.sensory.last_gru_act    = [0.0] * SENSORY_GRU_DIM
+        g.sensory.last_integ_act  = [0.0] * SENSORY_INTEG_DIM
         g.sensory.last_pulse      = [0, 0]
         g.sensory._h              = np.zeros(SENSORY_GRU_DIM)
+        g.sensory.gamma_s         = np.zeros(GRU_INHERIT_DIM)
         g.sensory.load_flat(v[:ss])
+        g.sensory._h              = g.sensory._init_h()
 
         g.motor = MotorNN.__new__(MotorNN)
+        g.motor.last_embed_act  = [0.0] * MOTOR_EMBED_DIM
         g.motor.last_gru_act    = [0.0] * MOTOR_GRU_DIM
+        g.motor.last_integ_act  = [0.0] * MOTOR_INTEG_DIM
+        g.motor.last_cortex_act = [0.0] * MOTOR_CORTEX_DIM
         g.motor.last_output_act = [0.5, 0.5, 0.0]
         g.motor._h              = np.zeros(MOTOR_GRU_DIM)
+        g.motor.gamma_m         = np.zeros(GRU_INHERIT_DIM)
         g.motor.load_flat(v[ss:])
+        g.motor._h              = g.motor._init_h()
         return g
 
     # ----------------------------------------------------------------
@@ -117,13 +130,15 @@ class GAGenome:
     def update_activations(self, bn, obs: list[float]):
         """全層のアクティベーションをゲノムに同期する（可視化用）。"""
         self.last_input_act        = list(obs)
-        self.last_cortex_act       = list(getattr(bn.sensory, 'last_cortex_act', [0.0]*SENSORY_CORTEX_DIM))
-        self.last_sensory_gru      = list(getattr(bn, 'last_sensory_gru', [0.0]*SENSORY_GRU_DIM))
-        self.last_pulse_act        = list(getattr(bn.sensory, 'last_pulse', [0, 0]))
-        self.last_embed_act        = list(getattr(bn.motor, 'last_embed_act', [0.0]*MOTOR_EMBED_DIM))
-        self.last_motor_gru        = list(getattr(bn, 'last_motor_gru', [0.0]*MOTOR_GRU_DIM))
-        self.last_motor_cortex_act = list(getattr(bn.motor, 'last_cortex_act', [0.0]*MOTOR_CORTEX_DIM))
-        self.last_output_act       = list(getattr(bn, 'last_output', [0.5, 0.5, 0.0]))
+        self.last_cortex_act       = list(getattr(bn.sensory, 'last_input_act',  [0.0]*SENSORY_FF_DIM))
+        self.last_sensory_gru      = list(getattr(bn, 'last_sensory_gru',        [0.0]*SENSORY_GRU_DIM))
+        self.last_sensory_integ    = list(getattr(bn.sensory, 'last_integ_act',  [0.0]*SENSORY_INTEG_DIM))
+        self.last_pulse_act        = list(getattr(bn.sensory, 'last_pulse',      [0, 0]))
+        self.last_embed_act        = list(getattr(bn.motor, 'last_embed_act',    [0.0]*MOTOR_EMBED_DIM))
+        self.last_motor_gru        = list(getattr(bn, 'last_motor_gru',          [0.0]*MOTOR_GRU_DIM))
+        self.last_motor_integ      = list(getattr(bn.motor, 'last_integ_act',    [0.0]*MOTOR_INTEG_DIM))
+        self.last_motor_cortex_act = list(getattr(bn.motor, 'last_cortex_act',   [0.0]*MOTOR_CORTEX_DIM))
+        self.last_output_act       = list(getattr(bn, 'last_output',             [0.5, 0.5, 0.0]))
         # エイリアスも更新
         self.last_hidden_act  = self.last_cortex_act
         self.last_hidden2_act = self.last_sensory_gru

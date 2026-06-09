@@ -70,12 +70,17 @@ PULSE_TOTAL        = 20       # 1ターンのパルス数
 PULSE_CONSUME_RATE = 24       # 半速消化（24フレームごとに1パルス消化）
 PIPELINE_OFFSET    = 120      # 半ターンずれ（10パルス分）
 
-# ---- RNNボトルネックアーキテクチャ ----
+# ---- RNNボトルネックアーキテクチャ（継承・非継承分割設計） ----
 SENSORY_INPUT_DIM  = 6 + VISION_RAYS + 1  # = 12（obsベクトル全次元）
-SENSORY_CORTEX_DIM = 16       # 感覚皮質FFの出力次元
+SENSORY_FF_DIM     = 16       # 入力FFの出力次元
 SENSORY_GRU_DIM    = 16       # 感覚 GRUの隠れ次元
+SENSORY_INTEG_DIM  = 16       # 統合FFの出力次元
+SENSORY_CORTEX_DIM = 16       # 互換性維持用（= SENSORY_INTEG_DIM）
+GRU_INHERIT_DIM    = 8        # GRU隠れ状態の継承領域（8次元）
+GRU_EPISODE_DIM    = 8        # GRU隠れ状態の非継承領域（8次元）
 MOTOR_EMBED_DIM    = 16       # パルス埋め込みFFの出力次元
 MOTOR_GRU_DIM      = 16       # 運動 GRUの隠れ次元
+MOTOR_INTEG_DIM    = 16       # 統合FFの出力次元
 MOTOR_CORTEX_DIM   = 12       # 運動皮質FFの出力次元
 MOTOR_OUTPUT_DIM   = 3        # 出力FF（Accel/Steer/Brake）
 
