@@ -972,9 +972,7 @@ class Renderer:
                 pygame.draw.rect(self.screen, C_GRAY, (bx, uy + 22, 28, 28), 1)
                 bt = self.font_m.render(str(bit), True, C_WHITE if bit else C_GRAY)
                 self.screen.blit(bt, (bx + 14 - bt.get_width() // 2, uy + 28))
-            if phoneme:
-                pt = self.font_m.render(f"「{phoneme}」", True, (255, 220, 100))
-                self.screen.blit(pt, (x + 90, uy + 22))
+            # 音素表示はスロット履歴の直上に移動したため、ここには表示しない
 
         # 区切り線
         mid_y = y + h // 2
@@ -995,15 +993,19 @@ class Renderer:
                 pygame.draw.rect(self.screen, C_GRAY, (bx, ly + 22, 28, 28), 1)
                 bt = self.font_m.render(str(bit), True, C_WHITE if bit else C_GRAY)
                 self.screen.blit(bt, (bx + 14 - bt.get_width() // 2, ly + 28))
-            if phoneme:
-                pt = self.font_m.render(f"「{phoneme}」", True, (255, 220, 100))
-                self.screen.blit(pt, (x + 90, ly + 22))
+            # 音素表示はスロット履歴の直上に移動したため、ここには表示しない
 
         # パルス履歴グリッド（20スロット固定・下部）
         # 1ターン=20パルスに合わせて横幅20スロットに統一
         HIST_SLOTS = 20
         slot_w = max(8, (w - 12) // HIST_SLOTS)
         hy = y + h - 28
+
+        # 音素表示（常にスロット履歴の直上・消化パルスと一致）
+        if phoneme:
+            pt = self.font_m.render(f"「{phoneme}」", True, (255, 220, 100))
+            self.screen.blit(pt, (x + 6, hy - pt.get_height() - 2))
+
         # 左から順次追加、右端が最新スロット
         padded_hist = hist[-HIST_SLOTS:]  # 最新HIST_SLOTS分を取得
         for hi, hp in enumerate(padded_hist):
