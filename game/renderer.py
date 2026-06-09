@@ -360,20 +360,21 @@ class Renderer:
             f"BOTTLENECK  5Hz / 4bits{dummy_tag}", True, (180, 140, 60))
         self.screen.blit(title, (x + 4, y + 3))
 
-        # ダミーパルス状態（ランダム点滅）
+        # ダミーパルス状態（全パターン均等サイクル）
         if pulse_state is None:
-            # ダミー: 時刻に基づいたランダム点滅
+            # 5Hzパルスに合わせて全パターン（00/01/10/11）を均等に循環
             import time
-            t_seed = int(time.time() * 5) % 4   # 5Hz相当、2bits
-            pulse_state = [(t_seed >> i) & 1 for i in range(2)]
+            # 0.2秒ごとに切り替わる（全パターンを展開）
+            t_idx = int(time.time() * 5) % 4   # 0,1,2,3 を循環
+            pulse_state = [(t_idx >> (1 - i)) & 1 for i in range(2)]
 
         if history is None:
-            # ダミー履歴
+            # ダミー履歴（全パターンを展開）
             import time
             history = []
             for k in range(16):
                 ts = int(time.time() * 5 - k) % 4
-                history.append([(ts >> i) & 1 for i in range(2)])
+                history.append([(ts >> (1 - i)) & 1 for i in range(2)])
 
         # モード表示（方向ラベル + 性別記号）
         mode_color = (100, 160, 220) if mode == "listen" else (100, 200, 120)
