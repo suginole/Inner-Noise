@@ -14,6 +14,7 @@ from game.player_agent import PlayerAgent
 from game.ga_agent import GAAgent, GAGenome, GeneticAlgorithm
 from game.bottleneck import Bottleneck
 from game.renderer import Renderer
+from game import save_manager
 
 
 # ================================================================
@@ -23,6 +24,7 @@ class GameState:
     GA          = "ga"          # 通常GAモード（描画あり）
     GA_FAST_CFG = "ga_fast_cfg" # 高速モード設定画面
     GA_FAST     = "ga_fast"     # 高速学習モード（描画完全スキップ）
+    LOAD        = "load"        # モデルロード画面
 
 
 # カメラ切替閖値
@@ -71,8 +73,18 @@ class Game:
         # メニュー返報確認ダイアログ
         self.confirm_menu:  bool = False
 
+        # セーブ・ロード
+        self.load_models:   list[dict] = []
+        self.load_sel_idx:  int = 0
+        self.load_error:    str = ""
+        self.save_toast_msg:   str = ""   # トースト表示メッセージ
+        self.save_toast_timer: int = 0    # 表示フレーム数
+
         self.done_message: str = ""
         self.done_timer:   int = 0
+
+        # DB初期化
+        save_manager.init_db()
 
     # ----------------------------------------------------------------
     def init_player_mode(self):
@@ -99,6 +111,52 @@ class Game:
             car = Car(*self.field.start_pos)
             agent = GAAgent(car, self.field, genome)
             self.ga_agents.append(agent)
+
+    # ----------------------------------------------------------------
+    def _do_save(self, auto: bool = False):
+        """現在のGA状態をDBに保存する。"""
+        if self.ga is None:
+            return
+        try:
+            rid = save_manager.save_model(
+                self.ga,
+                terrain_seed=42,
+                goal_count=self.goal_reached_count,
+            )
+            prefix = "自動セーブ" if auto else "セーブ"
+            self.save_toast_msg   = f"{prefix}完了  Gen {self.ga.generation}  ID={rid}"
+            self.save_toast_timer = FPS * 3
+        except Exception as e:
+            self.save_toast_msg   = f"セーブ失敗: {e}"
+            self.save_toast_timer = FPS * 3
+
+    def _open_load_screen(self):
+        """ロード画面を開く。"""
+        self.load_models  = save_manager.list_models()
+        self.load_sel_idx = 0
+        self.load_error   = ""
+        self.state        = GameState.LOAD
+
+    def _do_load(self, fast_mode: bool = False):
+        """選択中のモデルをロードする。"""
+        if not self.load_models:
+            return
+        m = self.load_models[self.load_sel_idx]
+        if not m["compatible"]:
+            self.load_error = "互換性エラー: NN構造が一致しません"
+            return
+        try:
+            pop_size = m["pop_size"] if isinstance(m["pop_size"], int) else GA_POP_SIZE
+            self.init_ga_mode(pop_size=pop_size)
+            save_manager.load_model(m["id"], self.ga)
+            # エージェントを再生成
+            self._spawn_ga_agents()
+            self.state = GameState.GA_FAST if fast_mode else GameState.GA
+            self.save_toast_msg   = f"ロード完了  Gen {self.ga.generation}  ID={m['id']}"
+            self.save_toast_timer = FPS * 3
+            self.load_error = ""
+        except Exception as e:
+            self.load_error = f"ロード失敗: {e}"
 
     # ----------------------------------------------------------------
     def run(self):
@@ -186,7 +244,7 @@ class Game:
         if all_done:
             # 学習完了判定
             if self.goal_reached_count >= self.fast_cfg_goal_count:
-                self._evolve_generation()
+                self._evolve_generation(auto_save=True)  # 完了時自動セーブ
                 self.state = GameState.GA   # 監視モードへ自動遷移
                 return True
             self._evolve_generation()
@@ -194,15 +252,17 @@ class Game:
 
         return False
 
-    def _evolve_generation(self):
+    def _evolve_generation(self, auto_save: bool = False):
         """世代進化の共通処理。"""
         # 前世代の最高ゲノムをスナップショット保存
         best = self.ga.get_best()
         self.prev_best_genome = copy.deepcopy(best)
-        # ダミーデータでアクティベーションを更新（表示用）
-        import numpy as np
         dummy_obs = [0.5] * 12
         self.prev_best_genome.forward(dummy_obs)
+
+        # 自動セーブ（学習完了時）
+        if auto_save:
+            self._do_save(auto=True)
 
         self.ga.evolve()
         self.field.reset_foods(food_episode=self.ga.generation)
@@ -248,6 +308,30 @@ class Game:
                     self.state = GameState.GA
                 elif event.key == pygame.K_3:
                     self.state = GameState.GA_FAST_CFG
+                elif event.key == pygame.K_l:
+                    self._open_load_screen()
+
+            elif self.state == GameState.LOAD:
+                if event.key in (pygame.K_ESCAPE, pygame.K_m):
+                    self.state = GameState.MENU
+                elif event.key == pygame.K_UP:
+                    self.load_sel_idx = max(0, self.load_sel_idx - 1)
+                    self.load_error = ""
+                elif event.key == pygame.K_DOWN:
+                    self.load_sel_idx = min(
+                        len(self.load_models) - 1, self.load_sel_idx + 1)
+                    self.load_error = ""
+                elif event.key == pygame.K_RETURN:
+                    self._do_load(fast_mode=False)
+                elif event.key == pygame.K_TAB:
+                    self._do_load(fast_mode=True)
+                elif event.key == pygame.K_DELETE:
+                    if self.load_models:
+                        mid = self.load_models[self.load_sel_idx]["id"]
+                        save_manager.delete_model(mid)
+                        self.load_models = save_manager.list_models()
+                        self.load_sel_idx = min(
+                            self.load_sel_idx, max(0, len(self.load_models) - 1))
 
             elif self.state == GameState.GA_FAST_CFG:
                 self._handle_fast_cfg_key(event.key)
@@ -260,12 +344,13 @@ class Game:
 
             elif self.state == GameState.GA:
                 if event.key == pygame.K_m:
-                    # GA進行中は警告ダイアログを表示
                     if self.ga is not None and self.ga.generation > 0:
                         self.confirm_menu = True
                     else:
                         self.state = GameState.MENU
-                if event.key == pygame.K_TAB:
+                elif event.key == pygame.K_s:
+                    self._do_save(auto=False)
+                elif event.key == pygame.K_TAB:
                     if self.ga is None:
                         self.init_ga_mode(pop_size=self.fast_cfg_pop_size)
                     self.state = GameState.GA_FAST
@@ -360,6 +445,17 @@ class Game:
             pygame.display.flip()
             return
 
+        # セーブ・ロードトースト（全状態で表示）
+        if self.save_toast_timer > 0:
+            self.save_toast_timer -= 1
+            alpha = min(220, self.save_toast_timer * 10)
+            self.renderer.draw_save_toast(self.save_toast_msg, alpha)
+
+        if self.state == GameState.LOAD:
+            self.renderer.draw_load_screen(
+                self.load_models, self.load_sel_idx, self.load_error)
+            return
+
         if self.state == GameState.MENU:
             self.renderer.draw_mode_select()
 
@@ -443,7 +539,7 @@ class Game:
             x=SCREEN_W - 510 - 270, y=SCREEN_H - 105)
 
         hint = self.renderer.font_s.render(
-            "Tab: Fast Mode  M: Menu  ESC: Quit", True, C_GRAY)
+            "S: Save  Tab: Fast Mode  M: Menu  ESC: Quit", True, C_GRAY)
         self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 20))
 
     def _draw_snapshot_label(self):

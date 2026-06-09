@@ -377,6 +377,100 @@ class Renderer:
                 pygame.draw.rect(self.screen, c, (bx, by, 7, 7))
 
     # ----------------------------------------------------------------
+    def draw_load_screen(self, models: list[dict], selected_idx: int,
+                         error_msg: str = "") -> None:
+        """モデルロード画面。
+
+        Args:
+            models: save_manager.list_models() の返り値
+            selected_idx: 現在選択中のインデックス
+            error_msg: 互換性エラーなどのメッセージ
+        """
+        self.screen.fill(C_BG)
+
+        title = self.font_l.render("モデルをロード", True, C_WHITE)
+        self.screen.blit(title, (SCREEN_W // 2 - title.get_width() // 2, 30))
+
+        if not models:
+            t = self.font_m.render("保存済みモデルがありません", True, C_GRAY)
+            self.screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, SCREEN_H // 2))
+        else:
+            # ヘッダー
+            hx = 40
+            cols = [40, 220, 340, 430, 530, 650, 760]
+            headers = ["ID", "保存日時", "Gen", "Best", "Avg", "Goal", "Pop"]
+            for i, (hdr, cx) in enumerate(zip(headers, cols)):
+                ht = self.font_s.render(hdr, True, (160, 160, 200))
+                self.screen.blit(ht, (cx, 80))
+            pygame.draw.line(self.screen, (60, 60, 80),
+                             (30, 96), (SCREEN_W - 30, 96), 1)
+
+            # リスト表示（最大10件）
+            visible = models[:10]
+            for i, m in enumerate(visible):
+                ry = 104 + i * 38
+                is_sel = (i == selected_idx)
+
+                # 選択中は背景色
+                if is_sel:
+                    pygame.draw.rect(self.screen, (20, 30, 50),
+                                     (30, ry - 2, SCREEN_W - 60, 34),
+                                     border_radius=4)
+                    pygame.draw.rect(self.screen, (80, 120, 200),
+                                     (30, ry - 2, SCREEN_W - 60, 34),
+                                     1, border_radius=4)
+
+                # 互換性アイコン
+                compat_c = (80, 200, 100) if m["compatible"] else (200, 80, 80)
+                compat_t = self.font_s.render(
+                    "OK" if m["compatible"] else "NG", True, compat_c)
+
+                # 日時を短縮
+                saved_at = m["saved_at"][:16].replace("T", " ") if m["saved_at"] else "---"
+
+                row_color = C_WHITE if is_sel else (180, 180, 200)
+                vals = [
+                    str(m["id"]),
+                    saved_at,
+                    str(m["generation"]),
+                    f"{m['best_fitness']:.1f}",
+                    f"{m['avg_fitness']:.1f}",
+                    str(m["goal_count"]),
+                    str(m["pop_size"]),
+                ]
+                for val, cx in zip(vals, cols):
+                    vt = self.font_s.render(val, True, row_color)
+                    self.screen.blit(vt, (cx, ry + 4))
+                self.screen.blit(compat_t, (SCREEN_W - 60, ry + 4))
+
+        # エラーメッセージ
+        if error_msg:
+            et = self.font_m.render(error_msg, True, (220, 80, 80))
+            self.screen.blit(et, (SCREEN_W // 2 - et.get_width() // 2, SCREEN_H - 120))
+
+        # キーヒント
+        hints = [
+            "↑↓: 選択    Enter: 監視モードでロード    Tab: 高速モードでロード    Del: 削除    ESC: 戻る",
+        ]
+        for i, h in enumerate(hints):
+            ht = self.font_s.render(h, True, C_GRAY)
+            self.screen.blit(ht, (SCREEN_W // 2 - ht.get_width() // 2,
+                                  SCREEN_H - 30 - i * 20))
+
+    # ----------------------------------------------------------------
+    def draw_save_toast(self, msg: str, alpha: int = 220):
+        """セーブ完了トースト通知。"""
+        t = self.font_m.render(msg, True, C_WHITE)
+        w, h = t.get_width() + 24, t.get_height() + 14
+        bg = pygame.Surface((w, h), pygame.SRCALPHA)
+        bg.fill((20, 60, 30, alpha))
+        x = SCREEN_W // 2 - w // 2
+        y = 20
+        self.screen.blit(bg, (x, y))
+        pygame.draw.rect(self.screen, (80, 200, 100), (x, y, w, h), 1, border_radius=4)
+        self.screen.blit(t, (x + 12, y + 7))
+
+    # ----------------------------------------------------------------
     def draw_mode_select(self):
         """モード選択画面を描画する。"""
         self.screen.fill(C_BG)
@@ -391,6 +485,7 @@ class Renderer:
             ("1", "PLAYER MODE",     "キーボードで車を直接操作する",                   C_CAR),
             ("2", "GA MODE",         "遠伝的アルゴリズムの学習を観察する",             C_CAR_GA),
             ("3", "FAST LEARN MODE", "描画スキップの高速学習モード（Tabで監視切替）", (255, 200, 50)),
+            ("L", "LOAD MODEL",      "保存済みモデルをロードする",                   (180, 140, 220)),
         ]
         for i, (key, name, desc, color) in enumerate(options):
             oy = 320 + i * 100
