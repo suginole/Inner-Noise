@@ -328,6 +328,9 @@ class RNNBottleneck:
 
     PULSE_GEN_INTERVAL = TURN_FRAMES // PULSE_TOTAL
 
+    # 表示専用タイマーの間隔: 5Hz = 12フレームに1スロット点灯
+    DISPLAY_INTERVAL = TURN_FRAMES // PULSE_TOTAL  # = 12
+
     def __init__(self, sensory: SensoryNN, motor: MotorNN):
         self.sensory = sensory
         self.motor   = motor
@@ -352,6 +355,13 @@ class RNNBottleneck:
         self.last_motor_gru:   list[float] = [0.0] * MOTOR_GRU_DIM
         self.last_output:      list[float] = [0.5, 0.5, 0.0]
 
+        # ---- 表示・音声専用（実際の消化パイプラインとは独立） ----
+        # ターン境界でそのターンの全パルスをコピーし、5Hzで1個ずつ点灯・発音する
+        self._display_queue:   list[list[int]] = []   # 今ターンの未表示パルス
+        self._display_history: list[list[int]] = []   # 表示済みスロット（最大20個）
+        self._display_phoneme: str = ""               # 現在表示中の音素文字
+        self._display_frame:   int = 0                # 表示タイマー用フレームカウンタ
+
     def reset(self, prefill: bool = True):
         """エピソードをリセットする。
 
@@ -372,6 +382,11 @@ class RNNBottleneck:
         self._last_action   = [0.0, 0.5, 0.0]
         self.sensory.reset()
         self.motor.reset()
+        # 表示専用リセット
+        self._display_queue   = []
+        self._display_history = []
+        self._display_phoneme = ""
+        self._display_frame   = 0
 
         if prefill:
             # 感覚層をダミー入力でPULSE_TOTAL回先行起動し、
@@ -398,10 +413,32 @@ class RNNBottleneck:
 
         if f > 0 and f % TURN_FRAMES == 0:
             self._pulse_buffer.extend(self._outgoing)
+            # 表示専用: そのターンの全パルスを表示キューにコピーし、スロットをリセット
+            self._display_queue   = [p[:] for p in self._outgoing]
+            self._display_history = []
+            self._display_frame   = 0
             self._outgoing = []
             self._turn += 1
             self._consume_count = 0
             self._mode = "speak" if self._mode == "listen" else "listen"
+
+        # 表示専用タイマー: 5Hz（12フレームに1個）でキューからスロットを点灯・発音
+        if self._display_queue and self._display_frame % self.DISPLAY_INTERVAL == 0:
+            disp_pulse = self._display_queue.pop(0)
+            self._display_history.append(disp_pulse)
+            if len(self._display_history) > PULSE_TOTAL:
+                self._display_history.pop(0)
+            bits2 = (disp_pulse[0] << 1) | disp_pulse[1]
+            from config import PHONEME_TABLE
+            self._display_phoneme = PHONEME_TABLE.get(bits2 & 0x3, "")
+            # 音声出力（表示専用タイミングで発音）
+            if self.audio_enabled and self.converter is not None:
+                direction = 'S→M' if self._mode == 'listen' else 'M→S'
+                try:
+                    self.converter.play(bits2, direction=direction)
+                except Exception:
+                    pass
+        self._display_frame += 1
 
         if f % PULSE_CONSUME_RATE == 0 and self._pulse_buffer:
             pulse = self._pulse_buffer.pop(0)
@@ -412,7 +449,9 @@ class RNNBottleneck:
             self._consume_count += 1
 
             bits2 = (pulse[0] << 1) | pulse[1]
-            self.on_pulse_emit(bits2)
+            # 音声は表示専用タイマー側で出力するため、ここでは_last_phonemeの更新のみ
+            from config import PHONEME_TABLE
+            self._last_phoneme = PHONEME_TABLE.get(bits2 & 0x3, "")
 
             action = self.motor.forward(pulse)
             self._last_action = action
@@ -425,15 +464,11 @@ class RNNBottleneck:
         return self._last_action
 
     def on_pulse_emit(self, bits2: int) -> None:
-        """パルス消化時（受信側）に呼ばれる音声フック。"""
+        """パルス消化時（受信側）に呼ばれるフック。
+        音声出力は表示専用タイマー側に移動したため、ここでは_last_phonemeの更新のみ。
+        """
         from config import PHONEME_TABLE
         self._last_phoneme = PHONEME_TABLE.get(bits2 & 0x3, "")
-        if self.audio_enabled and self.converter is not None:
-            direction = 'S→M' if self._mode == 'listen' else 'M→S'
-            try:
-                self.converter.play(bits2, direction=direction)
-            except Exception:
-                pass
 
     def enable_audio(self) -> None:
         if self.audio_enabled:
@@ -473,3 +508,18 @@ class RNNBottleneck:
 
     def get_consume_progress(self) -> tuple[int, int]:
         return self._consume_count, len(self._pulse_buffer)
+
+    # ---- 表示専用getter ----
+    def get_display_history(self) -> list[list[int]]:
+        """表示専用スロット履歴（5Hzタイミングで埋まる、1ターンでリセット）。"""
+        return self._display_history
+
+    def get_display_phoneme(self) -> str:
+        """現在表示中の音素文字（5Hzタイミングで更新）。"""
+        return self._display_phoneme
+
+    def get_display_progress(self) -> float:
+        """表示タイマーの進捗（0.0～1.0）。スロットの埋まり具合。"""
+        total = PULSE_TOTAL
+        filled = len(self._display_history)
+        return filled / total if total > 0 else 0.0

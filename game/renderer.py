@@ -944,18 +944,22 @@ class Renderer:
         title = self.font_s.render("BOTTLENECK  2bits / 5Hz", True, (220, 200, 80))
         self.screen.blit(title, (x + 4, y + 3))
 
-        pulse  = bottleneck.get_current_pulse() if hasattr(bottleneck, 'get_current_pulse') else [0, 0]
-        hist   = bottleneck.get_pulse_history()  if hasattr(bottleneck, 'get_pulse_history')  else []
-        mode   = bottleneck.get_mode()            if hasattr(bottleneck, 'get_mode')            else 'listen'
-        prog   = bottleneck.get_turn_progress()   if hasattr(bottleneck, 'get_turn_progress')   else 0.0
-
-        # 音素文字は常にメーターの最新スロット（右端）から導出する
-        if hist:
-            latest_pulse = hist[-1]
-            latest_bits2 = (latest_pulse[0] << 1) | latest_pulse[1]
+        pulse   = bottleneck.get_current_pulse()    if hasattr(bottleneck, 'get_current_pulse')    else [0, 0]
+        mode    = bottleneck.get_mode()              if hasattr(bottleneck, 'get_mode')              else 'listen'
+        prog    = bottleneck.get_turn_progress()     if hasattr(bottleneck, 'get_turn_progress')     else 0.0
+        # 表示専用getter（存在する場合はそちらを使用、なければ旧getterにフォールバック）
+        if hasattr(bottleneck, 'get_display_history'):
+            hist    = bottleneck.get_display_history()
+            phoneme = bottleneck.get_display_phoneme()
+            prog    = bottleneck.get_display_progress()
         else:
-            latest_bits2 = (pulse[0] << 1) | pulse[1]
-        phoneme = PHONEME_TABLE.get(latest_bits2 & 0x3, "")
+            hist    = bottleneck.get_pulse_history() if hasattr(bottleneck, 'get_pulse_history') else []
+            if hist:
+                latest_pulse = hist[-1]
+                latest_bits2 = (latest_pulse[0] << 1) | latest_pulse[1]
+            else:
+                latest_bits2 = (pulse[0] << 1) | pulse[1]
+            phoneme = PHONEME_TABLE.get(latest_bits2 & 0x3, "")
 
         # 上段: S→M（傾聴ターン）
         uy = y + 18
