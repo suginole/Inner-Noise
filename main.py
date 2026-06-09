@@ -25,6 +25,7 @@ class GameState:
     GA_FAST_CFG = "ga_fast_cfg" # 高速モード設定画面
     GA_FAST     = "ga_fast"     # 高速学習モード（描画完全スキップ）
     LOAD        = "load"        # モデルロード画面
+    LOAD_RESUME = "load_resume" # ロード後の再開モード選択画面
     BACKROOM    = "backroom"    # 音声入出力確認・デバッグモード
 
 
@@ -83,6 +84,10 @@ class Game:
         self.load_error:    str = ""
         self.save_toast_msg:   str = ""   # トースト表示メッセージ
         self.save_toast_timer: int = 0    # 表示フレーム数
+
+        # ロード元情報（LOAD_RESUME画面・HUD表示用）
+        self.loaded_from_gen: int | None = None  # ロード元の世代数（None=新規）
+        self.load_resume_meta: dict | None = None  # ロード後の表示用メタデータ
 
         self.done_message: str = ""
         self.done_timer:   int = 0
@@ -252,8 +257,8 @@ class Game:
         self.load_error   = ""
         self.state        = GameState.LOAD
 
-    def _do_load(self, fast_mode: bool = False):
-        """選択中のモデルをロードする。"""
+    def _do_load(self):
+        """選択中のモデルをロードしてLOAD_RESUME画面へ遷移する。"""
         if not self.load_models:
             return
         m = self.load_models[self.load_sel_idx]
@@ -266,10 +271,12 @@ class Game:
             save_manager.load_model(m["id"], self.ga)
             # エージェントを再生成
             self._spawn_ga_agents()
-            self.state = GameState.GA_FAST if fast_mode else GameState.GA
-            self.save_toast_msg   = f"ロード完了  Gen {self.ga.generation}  ID={m['id']}"
-            self.save_toast_timer = FPS * 3
+            # ロード元情報を記録
+            self.loaded_from_gen  = self.ga.generation
+            self.load_resume_meta = m
             self.load_error = ""
+            # LOAD_RESUME画面へ遷移（モード選択を促す）
+            self.state = GameState.LOAD_RESUME
         except Exception as e:
             self.load_error = f"ロード失敗: {e}"
 
@@ -455,9 +462,7 @@ class Game:
                         len(self.load_models) - 1, self.load_sel_idx + 1)
                     self.load_error = ""
                 elif event.key == pygame.K_RETURN:
-                    self._do_load(fast_mode=False)
-                elif event.key == pygame.K_TAB:
-                    self._do_load(fast_mode=True)
+                    self._do_load()
                 elif event.key == pygame.K_DELETE:
                     if self.load_models:
                         mid = self.load_models[self.load_sel_idx]["id"]
@@ -465,6 +470,21 @@ class Game:
                         self.load_models = save_manager.list_models()
                         self.load_sel_idx = min(
                             self.load_sel_idx, max(0, len(self.load_models) - 1))
+
+            elif self.state == GameState.LOAD_RESUME:
+                if event.key == pygame.K_ESCAPE:
+                    # ロード画面に戻る
+                    self.state = GameState.LOAD
+                elif event.key == pygame.K_2:
+                    # 監視モードで再開
+                    self.save_toast_msg   = f"ロード完了  Gen {self.ga.generation}  ID={self.load_resume_meta['id']}"
+                    self.save_toast_timer = FPS * 3
+                    self.state = GameState.GA
+                elif event.key == pygame.K_3:
+                    # 高速モードで再開
+                    self.save_toast_msg   = f"ロード完了  Gen {self.ga.generation}  ID={self.load_resume_meta['id']}"
+                    self.save_toast_timer = FPS * 3
+                    self.state = GameState.GA_FAST
 
             elif self.state == GameState.GA_FAST_CFG:
                 self._handle_fast_cfg_key(event.key)
@@ -611,6 +631,10 @@ class Game:
                 self.load_models, self.load_sel_idx, self.load_error)
             return
 
+        if self.state == GameState.LOAD_RESUME:
+            self._draw_load_resume()
+            return
+
         if self.state == GameState.BACKROOM:
             self.renderer.draw_backroom(
                 bottleneck=self.br_bn,
@@ -721,11 +745,6 @@ class Game:
         x, y  = 20, 20
         cam_mode = "BEST" if alive_count <= CAMERA_SWITCH_THRESHOLD else "CENTROID"
 
-        bg = pygame.Surface((280, 130), pygame.SRCALPHA)
-        bg.fill((10, 12, 20, 200))
-        self.screen.blit(bg, (x, y))
-        pygame.draw.rect(self.screen, (194, 24, 91), (x, y, 280, 130), 1)
-
         lines = [
             f"Gen: {stats['generation']:4d}   Pop: {self.ga.pop_size}",
             f"Alive: {alive_count:3d} / {self.ga.pop_size}  [{cam_mode}]",
@@ -735,8 +754,18 @@ class Game:
             f"Mut: {stats.get('mut_rate',0):.3f}",
             f"Frame: {self.ga_frame}",
         ]
+        if self.loaded_from_gen is not None:
+            lines.insert(0, f"LOADED  Gen:{self.loaded_from_gen} → 継続中")
+
+        hud_h = 12 + len(lines) * 18
+        bg = pygame.Surface((280, hud_h), pygame.SRCALPHA)
+        bg.fill((10, 12, 20, 200))
+        self.screen.blit(bg, (x, y))
+        pygame.draw.rect(self.screen, (194, 24, 91), (x, y, 280, hud_h), 1)
+
         for i, line in enumerate(lines):
-            t = font.render(line, True, (244, 143, 177))
+            color = (255, 220, 80) if (i == 0 and self.loaded_from_gen is not None) else (244, 143, 177)
+            t = font.render(line, True, color)
             self.screen.blit(t, (x + 6, y + 6 + i * 18))
 
         # ゴール到達カウンタ
@@ -744,7 +773,7 @@ class Game:
         gt = font.render(
             f"GOAL REACHED: {self.goal_reached_count}/{self.fast_cfg_goal_count}",
             True, goal_color)
-        self.screen.blit(gt, (x + 6, y + 130 + 4))
+        self.screen.blit(gt, (x + 6, y + hud_h + 4))
 
     # ----------------------------------------------------------------
     def _draw_fast_overlay(self):
@@ -813,6 +842,61 @@ class Game:
             ht = font_s.render(h, True, C_GRAY)
             self.screen.blit(ht, (SCREEN_W // 2 - ht.get_width() // 2,
                                   SCREEN_H - 50 + i * 20))
+
+    # ----------------------------------------------------------------
+    def _draw_load_resume(self):
+        """ロード後の再開モード選択画面。"""
+        font_l = self.renderer.font_l
+        font_m = self.renderer.font_m
+        font_s = self.renderer.font_s
+
+        # 背景オーバーレイ
+        ov = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+        ov.fill((5, 8, 18, 240))
+        self.screen.blit(ov, (0, 0))
+
+        # タイトル
+        t_title = font_l.render("モデルをロードしました", True, (100, 220, 255))
+        self.screen.blit(t_title, (SCREEN_W // 2 - t_title.get_width() // 2, 120))
+
+        # メタデータ表示
+        m = self.load_resume_meta
+        if m is not None:
+            gen_val  = self.ga.generation if self.ga else m.get("generation", "?")
+            best_val = m.get("best_fitness", 0.0)
+            saved_at = m.get("saved_at", "")
+            # ISO形式の日時を「YYYY-MM-DD HH:MM」形式に変換
+            try:
+                from datetime import datetime, timezone
+                dt = datetime.fromisoformat(saved_at)
+                saved_at_str = dt.astimezone().strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                saved_at_str = saved_at[:16] if len(saved_at) >= 16 else saved_at
+
+            info_lines = [
+                f"Gen: {gen_val}    Best: {best_val:.1f}",
+                f"保存日時: {saved_at_str}",
+            ]
+            for i, line in enumerate(info_lines):
+                t = font_m.render(line, True, (200, 200, 220))
+                self.screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 200 + i * 34))
+
+        # 選択ボタン
+        bx, by, bw, bh = SCREEN_W // 2 - 260, 300, 520, 180
+        pygame.draw.rect(self.screen, (10, 15, 25), (bx, by, bw, bh), border_radius=10)
+        pygame.draw.rect(self.screen, (100, 180, 255), (bx, by, bw, bh), 2, border_radius=10)
+
+        btn_items = [
+            ("[2]  監視モードで再開",   (50, 220, 150)),
+            ("[3]  高速学習モードで再開", (255, 200, 50)),
+        ]
+        for i, (label, color) in enumerate(btn_items):
+            t = font_m.render(label, True, color)
+            self.screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, by + 24 + i * 60))
+
+        # ESCキャンセルヒント
+        hint = font_s.render("[ESC] キャンセル (ロード画面に戻る)", True, C_GRAY)
+        self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 30))
 
     # ----------------------------------------------------------------
     def _draw_fast_cfg(self):

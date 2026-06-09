@@ -12,7 +12,7 @@ DB スキーマ:
   - 世代数カウンタ
 
 保存しないもの:
-  - LSTMの隠れ状態（エピソード内オンラインのため不要）
+  - GRUの隠れ状態（エピソード内オンラインのため不要）
 """
 import sqlite3
 import pickle
@@ -50,27 +50,83 @@ def init_db():
 
 
 def _build_net_meta(ga) -> dict:
-    """ネットワーク構造メタデータを構築する。"""
+    """ネットワーク構造メタデータを構築する（新GRU分割アーキテクチャ対応）。"""
     from game.ga_agent import GAGenome, OBS_DIM
+    from game.rnn_bottleneck import SensoryNN, MotorNN
+    from config import (
+        SENSORY_INPUT_DIM, SENSORY_FF_DIM, SENSORY_GRU_DIM, SENSORY_INTEG_DIM,
+        MOTOR_EMBED_DIM, MOTOR_GRU_DIM, MOTOR_INTEG_DIM, MOTOR_CORTEX_DIM,
+        MOTOR_OUTPUT_DIM, BN_PARAMS, GRU_INHERIT_DIM, GRU_EPISODE_DIM,
+    )
     return {
-        "obs_dim":  OBS_DIM,
-        "h1":       GAGenome.H1,
-        "h2":       GAGenome.H2,
-        "out":      3,
-        "pop_size": ga.pop_size,
+        "obs_dim":            OBS_DIM,
+        "sensory_input_dim":  SENSORY_INPUT_DIM,
+        "sensory_ff_dim":     SENSORY_FF_DIM,
+        "sensory_gru_dim":    SENSORY_GRU_DIM,
+        "sensory_integ_dim":  SENSORY_INTEG_DIM,
+        "motor_embed_dim":    MOTOR_EMBED_DIM,
+        "motor_gru_dim":      MOTOR_GRU_DIM,
+        "motor_integ_dim":    MOTOR_INTEG_DIM,
+        "motor_cortex_dim":   MOTOR_CORTEX_DIM,
+        "motor_output_dim":   MOTOR_OUTPUT_DIM,
+        "bn_params":          BN_PARAMS,
+        "gru_inherit_dim":    GRU_INHERIT_DIM,
+        "gru_episode_dim":    GRU_EPISODE_DIM,
+        "sensory_flat_size":  SensoryNN.flat_size(),
+        "motor_flat_size":    MotorNN.flat_size(),
+        "genome_flat_size":   GAGenome.total_flat_size(),
+        "pop_size":           ga.pop_size,
     }
 
 
 def _check_compat(meta: dict) -> tuple[bool, str]:
-    """現在の構造とメタデータの互換性をチェックする。"""
+    """現在の構造とメタデータの互換性をチェックする（新GRU分割アーキテクチャ対応）。"""
     from game.ga_agent import GAGenome, OBS_DIM
+    from game.rnn_bottleneck import SensoryNN, MotorNN
+    from config import (
+        SENSORY_INPUT_DIM, SENSORY_FF_DIM, SENSORY_GRU_DIM, SENSORY_INTEG_DIM,
+        MOTOR_EMBED_DIM, MOTOR_GRU_DIM, MOTOR_INTEG_DIM, MOTOR_CORTEX_DIM,
+        MOTOR_OUTPUT_DIM, BN_PARAMS, GRU_INHERIT_DIM, GRU_EPISODE_DIM,
+    )
     errors = []
+
+    # --- 旧アーキテクチャ（H1/H2形式）との互換性チェック ---
+    # 旧形式のメタデータが保存されている場合は非互換と判定する
+    if "h1" in meta or "h2" in meta:
+        return False, "旧アーキテクチャ形式 (H1/H2) のデータは現在のGRU分割設計と互換性がありません"
+
+    # --- 新アーキテクチャの互換性チェック ---
+    # obs_dim は必須チェック
     if meta.get("obs_dim") != OBS_DIM:
-        errors.append(f"OBS_DIM: saved={meta.get('obs_dim')} current={OBS_DIM}")
-    if meta.get("h1") != GAGenome.H1:
-        errors.append(f"H1: saved={meta.get('h1')} current={GAGenome.H1}")
-    if meta.get("h2") != GAGenome.H2:
-        errors.append(f"H2: saved={meta.get('h2')} current={GAGenome.H2}")
+        errors.append(f"obs_dim: saved={meta.get('obs_dim')} current={OBS_DIM}")
+
+    # ゲノムフラットサイズが記録されている場合はそれを優先チェック
+    if "genome_flat_size" in meta:
+        current_flat = GAGenome.total_flat_size()
+        if meta["genome_flat_size"] != current_flat:
+            errors.append(
+                f"genome_flat_size: saved={meta['genome_flat_size']} current={current_flat}"
+            )
+    else:
+        # 旧形式の新アーキテクチャメタデータ（個別次元チェック）
+        checks = [
+            ("sensory_input_dim",  SENSORY_INPUT_DIM),
+            ("sensory_ff_dim",     SENSORY_FF_DIM),
+            ("sensory_gru_dim",    SENSORY_GRU_DIM),
+            ("sensory_integ_dim",  SENSORY_INTEG_DIM),
+            ("motor_embed_dim",    MOTOR_EMBED_DIM),
+            ("motor_gru_dim",      MOTOR_GRU_DIM),
+            ("motor_integ_dim",    MOTOR_INTEG_DIM),
+            ("motor_cortex_dim",   MOTOR_CORTEX_DIM),
+            ("motor_output_dim",   MOTOR_OUTPUT_DIM),
+            ("bn_params",          BN_PARAMS),
+            ("gru_inherit_dim",    GRU_INHERIT_DIM),
+            ("gru_episode_dim",    GRU_EPISODE_DIM),
+        ]
+        for key, current_val in checks:
+            if key in meta and meta[key] != current_val:
+                errors.append(f"{key}: saved={meta[key]} current={current_val}")
+
     if errors:
         return False, "NN structure mismatch: " + ", ".join(errors)
     return True, "OK"
