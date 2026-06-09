@@ -60,15 +60,22 @@ GOAL_RADIUS        = 60       # ゴール判定半径 (px)
 
 # ---- ボトルネック通信路 ----
 BN_PARAMS          = 2        # パラメータ数（2 bits = 母音のみ）
-BN_HZ              = 2.5      # パルス周波数（2.5Hz）
-BN_TURN_SEC        = 8        # 傾聴/発話ターン長 (秒)
-BN_PULSES_PER_TURN = 20       # 1ターンのパルス数（20固定）
 
-# ---- パイプライン型半双方向通信 ----
-TURN_FRAMES        = 480      # 8秒（60fps基準）
-PULSE_TOTAL        = 20       # 1ターンのパルス数
-PULSE_CONSUME_RATE = 48       # 半速消化（48フレームごとに1パルス消化）
-PIPELINE_OFFSET    = 240      # 半ターンずれ（10パルス分）
+# ---- パイプライン型半双方向通信（一元管理） ----
+# 変更する場合は下記の「基本定数」3つのみ編集すること。
+# 派生定数は自動計算される。
+
+# 基本定数（ここだけ編集する）
+BN_HZ              = 10       # パルス周波数（10Hz）
+BN_TURN_SEC        = 4        # 傾聴/発話ターン長 (秒)
+HALF_SPEED_RATIO   = 2        # 消化スピード比（生成の何分の1の速度で消化するか）
+
+# 派生定数（自動計算・編集不要）
+BN_PULSES_PER_TURN = int(BN_HZ * BN_TURN_SEC)          # 1ターンのパルス数 = 40
+TURN_FRAMES        = int(BN_TURN_SEC * FPS)             # 1ターンのフレーム数 = 240
+PULSE_TOTAL        = BN_PULSES_PER_TURN                 # 別名（一致保証） = 40
+PULSE_CONSUME_RATE = int(TURN_FRAMES / PULSE_TOTAL * HALF_SPEED_RATIO)  # 消化間隔 = 12
+PIPELINE_OFFSET    = TURN_FRAMES // 2                  # 半ターンずれ = 120
 
 # ---- RNNボトルネックアーキテクチャ（バッファGRU挿入型・対称構造） ----
 SENSORY_INPUT_DIM  = 6 + VISION_RAYS + 1  # = 12（obsベクトル全次元）

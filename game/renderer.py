@@ -357,7 +357,7 @@ class Renderer:
         # タイトル
         dummy_tag = "  [DUMMY]" if is_dummy else ""
         title = self.font_s.render(
-            f"BOTTLENECK  2.5Hz / 4bits{dummy_tag}", True, (180, 140, 60))
+            f"BOTTLENECK  10Hz / 4bits{dummy_tag}", True, (180, 140, 60))
         self.screen.blit(title, (x + 4, y + 3))
 
         # ダミーパルス状態（全パターン均等サイクル）
@@ -519,7 +519,7 @@ class Renderer:
         self.screen.blit(title, (SCREEN_W // 2 - title.get_width() // 2, 180))
 
         sub = self.font_m.render(
-            "2.5Hz / 4bits Bottleneck Communication Architecture", True, C_GRAY)
+            "10Hz / 4bits Bottleneck Communication Architecture", True, C_GRAY)
         self.screen.blit(sub, (SCREEN_W // 2 - sub.get_width() // 2, 220))
 
         options = [
@@ -960,7 +960,7 @@ class Renderer:
         self.screen.blit(bg, (x, y))
         pygame.draw.rect(self.screen, (200, 180, 50), (x, y, w, h), 1, border_radius=4)
 
-        title = self.font_s.render("BOTTLENECK  2bits / 2.5Hz", True, (220, 200, 80))
+        title = self.font_s.render("BOTTLENECK  2bits / 10Hz", True, (220, 200, 80))
         self.screen.blit(title, (x + 4, y + 3))
 
         pulse   = bottleneck.get_current_pulse()    if hasattr(bottleneck, 'get_current_pulse')    else [0, 0]
