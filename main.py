@@ -368,8 +368,19 @@ class Game:
         # 前世代の最高ゲノムをスナップショット保存
         best = self.ga.get_best()
         self.prev_best_genome = copy.deepcopy(best)
+        # ダミー入力でアクティベーションを更新（表示用）
         dummy_obs = [0.5] * 12
-        self.prev_best_genome.forward(dummy_obs)
+        dummy_pulse = self.prev_best_genome.sensory.forward(dummy_obs)
+        self.prev_best_genome.motor.forward(dummy_pulse)
+        self.prev_best_genome.update_activations(
+            type('_BN', (), {
+                'last_sensory_gru': self.prev_best_genome.sensory.last_gru_act,
+                'last_motor_gru':   self.prev_best_genome.motor.last_gru_act,
+                'last_output':      self.prev_best_genome.motor.last_output_act,
+                'sensory':          self.prev_best_genome.sensory,
+            })(),
+            dummy_obs
+        )
 
         # 自動セーブ（学習完了時）
         if auto_save:
@@ -753,19 +764,25 @@ class Game:
         # 高速モード中は最高適応度ゲノムを使用
         fast_display_genome = self.ga.get_best() if self.ga else None
         if fast_display_genome is not None:
-            gen_label = f"GEN {self.ga.generation} BEST (live)"
-            sl = font_s.render(gen_label, True, (180, 200, 100))
-            self.screen.blit(sl, (SCREEN_W - 510, SCREEN_H - 245))
-            # ダミー入力で表示（高速モード中は実際の観測なし）
-            import numpy as np
-            fast_display_genome.forward([0.5] * 12)
-            self.renderer.draw_activation_panel(
-                fast_display_genome,
-                x=SCREEN_W - 510, y=SCREEN_H - 230)
-
-        # ボトルネックダミーパネル
-        self.renderer.draw_bottleneck_dummy(
-            x=SCREEN_W - 510 - 270, y=SCREEN_H - 105)
+            # ダミー入力でアクティベーションを更新（高速モード中は実際の観測なし）
+            dummy_obs = [0.5] * 12
+            dummy_pulse = fast_display_genome.sensory.forward(dummy_obs)
+            fast_display_genome.motor.forward(dummy_pulse)
+            fast_display_genome.update_activations(
+                type('_BN', (), {
+                    'last_sensory_gru': fast_display_genome.sensory.last_gru_act,
+                    'last_motor_gru':   fast_display_genome.motor.last_gru_act,
+                    'last_output':      fast_display_genome.motor.last_output_act,
+                    'sensory':          fast_display_genome.sensory,
+                })(),
+                dummy_obs
+            )
+            # 3パネルモニター（画面下部中央）
+            total_w = 280 * 3 + 8 * 2
+            mx = SCREEN_W // 2 - total_w // 2
+            self.renderer.draw_rnn_monitor_panels(
+                fast_display_genome, self.audio_bn,
+                x=mx, y=SCREEN_H - 230, panel_w=280, panel_h=220)
 
         hints = [
             "Tab: Switch to Monitor  Enter: Exit Fast Mode",

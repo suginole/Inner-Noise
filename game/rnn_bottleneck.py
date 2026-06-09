@@ -406,9 +406,16 @@ class RNNBottleneck:
 
     # ----------------------------------------------------------------
     def on_pulse_emit(self, bits2: int) -> None:
+        """パルス消化時（受信側）に呼ばれる音声フック。
+        送信側では呼ばない（2重鳴防止）。
+        傘聴ターン（Mが受信）: S→M方向の高ピッチ（♀）
+        発話ターン（Sが受信）: M→S方向の低ピッチ（♂）
+        """
         from config import PHONEME_TABLE
         self._last_phoneme = PHONEME_TABLE.get(bits2 & 0x3, "")
         if self.audio_enabled and self.converter is not None:
+            # 消化側のターンに応じた方向で再生
+            # listenターン中はステージングパートのパルスをMが受信 → S→M方向
             direction = 'S→M' if self._mode == 'listen' else 'M→S'
             try:
                 self.converter.play(bits2, direction=direction)
