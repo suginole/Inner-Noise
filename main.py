@@ -208,17 +208,20 @@ class Game:
         }
         if key in hex_map:
             bits4 = hex_map[key]
-            self.br_bits4 = bits4
-            # 波形を合成
+            bits2 = bits4 & 0x3   # 2bitsのみ使用
+            self.br_bits4 = bits2
+
+            # 波形を合成（常に実行）
             from game.phoneme import PhonemeConverter
-            conv = PhonemeConverter()
-            self.br_waveform = conv.synthesize(bits4)
-            # 音声が有効なら再生
-            if self.br_bn.audio_enabled:
-                conv.play(bits4)
-            elif self.br_bn.converter is None:
-                # 音声無効でも波形だけ生成
-                pass
+            # br_bnのコンバーターを使い回す（または新規作成）
+            if self.br_bn.converter is None:
+                self.br_bn.enable_audio()   # converterを初期化
+            conv = self.br_bn.converter if self.br_bn.converter else PhonemeConverter()
+            self.br_waveform = conv.synthesize(bits2)
+
+            # 音声は常に再生（Vキーの状態に関わらず）
+            # バックルームはデバッグモードなので常に音を出す
+            conv.play(bits2)
 
     # ----------------------------------------------------------------
     def _do_save(self, auto: bool = False):

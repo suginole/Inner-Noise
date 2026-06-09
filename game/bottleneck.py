@@ -57,6 +57,13 @@ class Bottleneck:
         self.decoder   = None   # PhonemeDecoderインスタンス（遅延初期化）
         self._last_phoneme: str = ""   # 直近の音素（HUD表示用）
 
+        # ---- ダミーサイクルモード ----
+        # Trueの場傂、_fire_pulse()は観測ベクトルではなく
+        # 時刻ベースで全パターンを循環する
+        # 将来のRNN実装時はFalseに変更するだけで差し替え可能
+        self.use_dummy_cycle: bool = True
+        self._dummy_step: int = 0   # 循環カウンタ
+
     # ----------------------------------------------------------------
     def push(self, obs: list[float]) -> None:
         """感覚系から観測ベクトルを受け取る。"""
@@ -101,16 +108,26 @@ class Bottleneck:
     # ----------------------------------------------------------------
     def _fire_pulse(self) -> list[int]:
         """
-        観測ベクトルを2bitsパルスに変換する（スタブ：線形閾値）。
-        2bits = 母音のみ（子音なし）
-        将来: 感覚の海馬LSTM → Attention → 量子化 に差し替え。
+        2bitsパルスを生成する。
+
+        use_dummy_cycle=True（デフォルト）:
+          パルス発火ごとに 00→ 01→ 10→ 11 を循環。
+          将来のRNN実装時は use_dummy_cycle=False に変更するだけ。
+
+        use_dummy_cycle=False:
+          観測ベクトルから線形閾値で変換（スタブ）。
         """
+        if self.use_dummy_cycle:
+            # 00 -> 01 -> 10 -> 11 -> 00 ... を循環
+            bits2 = self._dummy_step % 4
+            self._dummy_step += 1
+            return [(bits2 >> 1) & 1, bits2 & 1]
+
+        # RNN実装用スタブ（観測ベクトルから変換）
         obs = self._last_obs
-        # スタブ：観測の各次元を閾値で2値化
-        # [energy, goal_angle, grad_x, grad_y, food_dx, food_dy]
-        p0 = 1 if obs[0] < 0.4 else 0          # エネルギー低下警告
-        p1 = 1 if obs[1] > 0.3 else 0           # ゴール右方向
-        return [p0, p1]   # 2bits
+        p0 = 1 if obs[0] < 0.4 else 0
+        p1 = 1 if obs[1] > 0.3 else 0
+        return [p0, p1]
 
     # ----------------------------------------------------------------
     def _decode_action(self, pulse: list[int]) -> list[float]:
@@ -215,3 +232,4 @@ class Bottleneck:
         self._last_action  = [0.0, 0.5, 0.0]
         self._pulse_history.clear()
         self._current_pulse = [0, 0]   # 2bits
+        self._dummy_step    = 0
