@@ -142,16 +142,16 @@ class Game:
 
         def _mic_worker():
             from game.phoneme import PhonemeDecoder
-            from scipy.fft import rfft, rfftfreq
-            from config import AUDIO_SAMPLE_RATE, PHONEME_VOWEL, PHONEME_CONSONANT
+            from config import AUDIO_SAMPLE_RATE, PHONEME_VOWEL, PHONEME_FORMANTS
             import numpy as np
 
             dec = PhonemeDecoder()
             if not dec.available:
                 self.br_mic_data = {
-                    "available": False,
-                    "f1": 0, "f2": 0,
-                    "vowel": "", "consonant": "",
+                    "available":    False,
+                    "f1":           0,
+                    "f2":           0,
+                    "vowel":        "",
                     "decoded_bits": 0,
                 }
                 self.br_mic_thread_running = False
@@ -159,32 +159,19 @@ class Game:
 
             while self.br_mic_thread_running:
                 frame = dec.record_frame()
-                decoded = dec.decode(frame)
+                decoded = dec.decode(frame)   # 2bits
 
-                # F1/F2ピーク周波数を計算
-                n = len(frame)
-                spec  = np.abs(rfft(frame))
-                freqs = rfftfreq(n, d=1.0 / AUDIO_SAMPLE_RATE)
+                # F1/F2ピーク周波数をPhonemeDecoderのメソッドで取得
+                f1, f2 = dec.detect_f1_f2(frame)
 
-                def peak_freq(lo, hi):
-                    mask = (freqs >= lo) & (freqs <= hi)
-                    if not np.any(mask): return 0.0
-                    return float(freqs[mask][np.argmax(spec[mask])])
-
-                f1 = peak_freq(200, 1000)
-                f2 = peak_freq(1000, 2600)
-
-                vowel_bits     = decoded & 0x3
-                consonant_bits = (decoded >> 2) & 0x3
-                vowel_char     = PHONEME_VOWEL.get(vowel_bits, "?")
-                consonant_char = PHONEME_CONSONANT.get(consonant_bits)
+                vowel_bits = decoded & 0x3
+                vowel_char = PHONEME_VOWEL.get(vowel_bits, "?")
 
                 self.br_mic_data = {
                     "available":    True,
                     "f1":           f1,
                     "f2":           f2,
                     "vowel":        vowel_char,
-                    "consonant":    str(consonant_char) if consonant_char else "(none)",
                     "decoded_bits": decoded,
                 }
 
