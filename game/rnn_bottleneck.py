@@ -400,6 +400,10 @@ class RNNBottleneck:
                 pre_pulses.append(pulse[:])
             # 運動NNのパルスバッファに事前充填
             self._pulse_buffer = pre_pulses
+            # 表示専用キューにも同じパルスを充填する。
+            # prefillは「前ターンの感覚予備動作」なので、
+            # そのパルスをターン1のスロット表示に使用するのが整合的。
+            self._display_queue = [p[:] for p in pre_pulses]
             # 感覚層の隠れ状態は先行起動後の状態を維持（リセット不要）
             # ターンカウンタは0のまま（正規パイプラインのターン、1から始まる）
 
