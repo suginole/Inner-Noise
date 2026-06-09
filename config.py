@@ -68,14 +68,14 @@ BN_PARAMS          = 2        # パラメータ数（2 bits = 母音のみ）
 # 基本定数（ここだけ編集する）
 BN_HZ              = 10       # パルス周波数（10Hz）
 BN_TURN_SEC        = 2        # 傾聴/発話ターン長 (秒)
-HALF_SPEED_RATIO   = 2        # 消化スピード比（生成の何分の1の速度で消化するか）
 
 # 派生定数（自動計算・編集不要）
 BN_PULSES_PER_TURN = int(BN_HZ * BN_TURN_SEC)          # 1ターンのパルス数 = 20
 TURN_FRAMES        = int(BN_TURN_SEC * FPS)             # 1ターンのフレーム数 = 120
 PULSE_TOTAL        = BN_PULSES_PER_TURN                 # 別名（一致保証） = 20
-PULSE_CONSUME_RATE = int(TURN_FRAMES / PULSE_TOTAL * HALF_SPEED_RATIO)  # 消化間隔 = 12
-PIPELINE_OFFSET    = TURN_FRAMES // 2                  # 半ターンずれ = 60
+PULSE_GEN_INTERVAL = FPS // BN_HZ                      # 生成間隔 = 6フレーム
+PULSE_CONSUME_RATE = PULSE_GEN_INTERVAL                # 消化間隔 = 生成と同周期 = 6
+PIPELINE_OFFSET    = PULSE_GEN_INTERVAL                # 消化は生成の1周期後 = 6
 
 # ---- RNNボトルネックアーキテクチャ（バッファGRU挿入型・対称構造） ----
 SENSORY_INPUT_DIM  = 6 + VISION_RAYS + 1  # = 12（obsベクトル全次元）

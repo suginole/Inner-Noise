@@ -37,7 +37,7 @@ class Bottleneck:
 
         self._frame_count  = 0
         self._pulse_timer  = 0.0
-        self._pulse_interval = 1.0 / BN_HZ   # 0.4秒
+        self._pulse_interval = 1.0 / BN_HZ   # 0.1秒（10Hz）
         self._turn_timer   = 0.0
         self._turn_duration = float(BN_TURN_SEC)
         self._mode         = "listen"   # "listen" | "speak"

@@ -31,7 +31,7 @@ from config import (
     BUF_GRU_DIM, MEM_GRU_DIM, GRU_INHERIT_DIM, GRU_EPISODE_DIM,
     BYPASS_FF_DIM, L1_IN_DIM, L1_OUT_DIM,
     SENSORY_ENCODE_DIM, MOTOR_OUTPUT_DIM,
-    TURN_FRAMES, PULSE_TOTAL, PULSE_CONSUME_RATE, PIPELINE_OFFSET,
+    TURN_FRAMES, PULSE_TOTAL, PULSE_CONSUME_RATE, PULSE_GEN_INTERVAL, PIPELINE_OFFSET,
 )
 
 
@@ -437,10 +437,16 @@ class MotorNN:
 # RNNBottleneck（パイプライン型半双方向通信）
 # ================================================================
 class RNNBottleneck:
-    """パイプライン型半双方向通信ボトルネック。"""
+    """リアルタイム半双方向通信ボトルネック。
 
-    PULSE_GEN_INTERVAL = TURN_FRAMES // PULSE_TOTAL   # = 24
-    DISPLAY_INTERVAL   = TURN_FRAMES // PULSE_TOTAL   # = 24（2.5Hz）
+    生成と消化を同周期・同位相に同期させることで、
+    感覚の鮮度を遅延なく運動側に届ける。
+    遅延: 最大PULSE_GEN_INTERVALフレーム（6フレーム）固定。
+    ターン境界は方向切替のみ。
+    """
+
+    PULSE_GEN_INTERVAL = PULSE_GEN_INTERVAL   # configから取得 = 6
+    DISPLAY_INTERVAL   = PULSE_GEN_INTERVAL   # 表示も生成と同周期 = 6（10Hz）
 
     def __init__(self, sensory: SensoryNN, motor: MotorNN):
         self.sensory = sensory
@@ -449,7 +455,6 @@ class RNNBottleneck:
         self._frame:         int = 0
         self._turn:          int = 0
         self._pulse_buffer:  list[list[int]] = []
-        self._outgoing:      list[list[int]] = []
         self._consume_count: int = 0
 
         self._current_pulse: list[int] = [0, 0]
@@ -473,10 +478,12 @@ class RNNBottleneck:
         self._display_frame:   int = 0
 
     def reset(self, prefill: bool = True):
+        """エピソードをリセットする。
+        prefill=Trueの場合、ダミー入力で1発生成してパイプラインを起動する。
+        """
         self._frame         = 0
         self._turn          = 0
         self._pulse_buffer  = []
-        self._outgoing      = []
         self._consume_count = 0
         self._current_pulse = [0, 0]
         self._pulse_history = []
@@ -490,41 +497,43 @@ class RNNBottleneck:
         self._display_frame   = 0
 
         if prefill:
-            from config import PULSE_TOTAL
+            # ダミー入力で1発生成してパイプラインを起動する。
+            # リアルタイム方式では1発で十分（消化は次の生成フレームまで待つ）。
             dummy_obs = [0.5] * SENSORY_INPUT_DIM
-            pre_pulses = []
-            for _ in range(PULSE_TOTAL):
-                pulse = self.sensory.forward(dummy_obs, is_pulse_frame=False)
-                pre_pulses.append(pulse[:])
-            self._pulse_buffer  = pre_pulses
-            self._display_queue = [p[:] for p in pre_pulses]
+            pulse = self.sensory.forward(dummy_obs, is_pulse_frame=True)
+            self._pulse_buffer  = [pulse[:]]
+            self._display_queue = [pulse[:]]
 
     def step(self, obs: list[float]) -> list[float]:
-        f = self._frame
+        """リアルタイム同期方式の1ステップ処理。
 
+        処理順序:
+          1. 生成（6フレームごと）: obsを感覚NNに通し、即座に_pulse_bufferへ
+          2. 表示タイマー（6フレームごと）: スロット点灯・音声出力
+          3. 消化（6フレームごと）: バッファから1発取り出し運動NNへ
+          4. ターン境界（120フレーム）: 方向切替のみ（バッファ継続）
+        """
+        f = self._frame
+        from config import PHONEME_TABLE
+
+        # --- 1. 生成: 6フレームごとに即座に_pulse_bufferへ追加 ---
         is_gen_frame = (f % self.PULSE_GEN_INTERVAL == 0)
         if is_gen_frame:
             pulse = self.sensory.forward(obs, is_pulse_frame=True)
-            self._outgoing.append(pulse)
+            self._pulse_buffer.append(pulse[:])
+            self.last_sensory_gru = self.sensory.last_gru_act
+        else:
+            # 非生成フレームでも感覚NNは常にobsを処理する（GRU隔れ状態を更新）
+            self.sensory.forward(obs, is_pulse_frame=False)
             self.last_sensory_gru = self.sensory.last_gru_act
 
-        if f > 0 and f % TURN_FRAMES == 0:
-            self._pulse_buffer.extend(self._outgoing)
-            self._display_queue   = [p[:] for p in self._outgoing]
-            self._display_history = []
-            self._display_frame   = 0
-            self._outgoing = []
-            self._turn += 1
-            self._consume_count = 0
-            self._mode = "speak" if self._mode == "listen" else "listen"
-
+        # --- 2. 表示タイマー: 生成と同周期でスロット点灯・音声出力 ---
         if self._display_queue and self._display_frame % self.DISPLAY_INTERVAL == 0:
             disp_pulse = self._display_queue.pop(0)
             self._display_history.append(disp_pulse)
             if len(self._display_history) > PULSE_TOTAL:
                 self._display_history.pop(0)
             bits2 = (disp_pulse[0] << 1) | disp_pulse[1]
-            from config import PHONEME_TABLE
             self._display_phoneme = PHONEME_TABLE.get(bits2 & 0x3, "")
             if self.audio_enabled and self.converter is not None:
                 direction = 'S→M' if self._mode == 'listen' else 'M→S'
@@ -532,8 +541,12 @@ class RNNBottleneck:
                     self.converter.play(bits2, direction=direction)
                 except Exception:
                     pass
+        # 表示キューに生成パルスを追加（生成と同フレームで表示キューにも追加）
+        if is_gen_frame:
+            self._display_queue.append(self._pulse_buffer[-1][:])
         self._display_frame += 1
 
+        # --- 3. 消化: PULSE_CONSUME_RATE（6フレーム）ごとにバッファから1発取り出し ---
         is_consume_frame = (f % PULSE_CONSUME_RATE == 0 and bool(self._pulse_buffer))
         if is_consume_frame:
             pulse = self._pulse_buffer.pop(0)
@@ -544,7 +557,6 @@ class RNNBottleneck:
             self._consume_count += 1
 
             bits2 = (pulse[0] << 1) | pulse[1]
-            from config import PHONEME_TABLE
             self._last_phoneme = PHONEME_TABLE.get(bits2 & 0x3, "")
 
             action = self.motor.forward(pulse, is_pulse_frame=True)
@@ -552,10 +564,18 @@ class RNNBottleneck:
             self.last_motor_gru = self.motor.last_gru_act
             self.last_output    = self.motor.last_output_act
         else:
+            # 非消化フレームでも運動NNは常に実行（GRU隔れ状態を更新）
             if self._current_pulse:
                 self.motor.forward(self._current_pulse, is_pulse_frame=False)
                 self.last_motor_gru = self.motor.last_gru_act
                 self.last_output    = self.motor.last_output_act
+
+        # --- 4. ターン境界: 方向切替のみ（バッファは継続） ---
+        if f > 0 and f % TURN_FRAMES == 0:
+            self._turn += 1
+            self._consume_count = 0
+            self._mode = "speak" if self._mode == "listen" else "listen"
+            # _pulse_bufferはリセットしない（パイプライン継続）
 
         self._frame += 1
         return self._last_action
