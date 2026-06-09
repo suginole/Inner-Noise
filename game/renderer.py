@@ -17,21 +17,43 @@ class Renderer:
       4. HUD: 画面座標固定のため常に高速
     """
 
-    # 日本語対応フォントのパス（優先順）
+    # 日本語対応フォントのパス（優先順: Mac → Linux → フォールバック）
     _JP_FONTS = [
+        # macOS
+        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/Library/Fonts/Arial Unicode.ttf",
+        # Linux (IPAゴシック)
         "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
+        "/usr/share/fonts/truetype/ipafont/ipag.ttf",
+        # Linux (Noto CJK)
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
     ]
+
+    # クラスレベルキャッシュ（同じサイズなら再読み込み不要）
+    _font_cache: dict = {}
 
     @staticmethod
     def _load_font(size: int) -> pygame.font.Font:
-        """日本語対応フォントを読み込む。見つからなければデフォルトにフォールバック。"""
+        """日本語対応フォントを読み込む。見つからなければSysFontにフォールバック。"""
         import os
+        if size in Renderer._font_cache:
+            # キャッシュされたパスから再読み込み
+            cached_path = Renderer._font_cache[size]
+            if cached_path is None:
+                return pygame.font.SysFont(None, size)
+            return pygame.font.Font(cached_path, size)
+
         for path in Renderer._JP_FONTS:
             if os.path.exists(path):
+                Renderer._font_cache[size] = path
                 return pygame.font.Font(path, size)
-        return pygame.font.SysFont("monospace", size)
+
+        # フォールバック: pygameのデフォルトフォント
+        Renderer._font_cache[size] = None
+        return pygame.font.SysFont(None, size)
 
     def __init__(self, screen: pygame.Surface):
         self.screen = screen
@@ -500,15 +522,16 @@ class Renderer:
         self.screen.blit(sub, (SCREEN_W // 2 - sub.get_width() // 2, 220))
 
         options = [
-            ("1", "PLAYER MODE",     "キーボードで車を直接操作する",                   C_CAR),
-            ("2", "GA MODE",         "遠伝的アルゴリズムの学習を観察する",             C_CAR_GA),
-            ("3", "FAST LEARN MODE", "描画スキップの高速学習モード（Tabで監視切替）", (255, 200, 50)),
-            ("L", "LOAD MODEL",      "保存済みモデルをロードする",                   (180, 140, 220)),
+            ("1", "PLAYER MODE",     "キーボードで車を直接操作する",                         C_CAR),
+            ("2", "GA MODE",         "遠伝的アルゴリズムの学習を観察する",                   C_CAR_GA),
+            ("3", "FAST LEARN MODE", "描画スキップの高速学習モード（Tabで監視切替）",   (255, 200, 50)),
+            ("L", "LOAD MODEL",      "保存済みモデルをロードする",                         (180, 140, 220)),
+            ("O", "BACKROOM MODE",   "音声入出力確認・デバッグモード",                   (255, 120, 180)),
         ]
         for i, (key, name, desc, color) in enumerate(options):
-            oy = 320 + i * 100
+            oy = 270 + i * 82   # 5項目に収まるよう間隔を縮小
             pygame.draw.rect(self.screen, (20, 22, 35),
-                             (SCREEN_W // 2 - 280, oy, 560, 70), border_radius=8)
+                             (SCREEN_W // 2 - 280, oy, 560, 68), border_radius=8)
             pygame.draw.rect(self.screen, color,
                              (SCREEN_W // 2 - 280, oy, 560, 70), 2, border_radius=8)
             k = self.font_l.render(f"[{key}]", True, color)
@@ -522,6 +545,242 @@ class Renderer:
                                   True, C_GRAY)
         self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 40))
 
+    # ================================================================
+    # バックルームモード描画
+    # ================================================================
+    def draw_backroom(self,
+                      bottleneck,
+                      manual_bits4: int,
+                      audio_on: bool,
+                      waveform: "np.ndarray | None",
+                      mic_data: dict | None):
+        """
+        バックルームモードの全画面を描画する。
+
+        Args:
+            bottleneck: Bottleneckインスタンス
+            manual_bits4: 手動入力された4bits値（0～15）
+            audio_on: 音声出力が有効かどうか
+            waveform: synthesize()の結果（np.ndarray）またはNone
+            mic_data: マイク解析結果の辞書またはNone
+              {
+                'f1': float, 'f2': float,
+                'vowel': str, 'consonant': str,
+                'decoded_bits': int,
+                'available': bool,
+              }
+        """
+        import numpy as np
+        from config import PHONEME_TABLE, PHONEME_FORMANTS, PHONEME_CONSONANT, PHONEME_VOWEL
+
+        self.screen.fill((0, 0, 0))   # 黒背景
+
+        # ---- タイトル ----
+        title = self.font_l.render("BACKROOM MODE  —  音声入出力確認", True, (255, 120, 180))
+        self.screen.blit(title, (SCREEN_W // 2 - title.get_width() // 2, 20))
+
+        # ---- ボトルネックパネル（中央上部） ----
+        bn_x = SCREEN_W // 2 - 130
+        bn_y = 65
+        bn_pulse = bottleneck.get_current_pulse()
+        bn_history = bottleneck.get_pulse_history()
+        self.draw_bottleneck_dummy(
+            x=bn_x, y=bn_y,
+            pulse_state=bn_pulse,
+            history=bn_history,
+            mode=bottleneck.get_mode(),
+            turn_progress=bottleneck.get_turn_progress(),
+            phoneme=bottleneck.get_last_phoneme(),
+            audio_on=audio_on,
+            is_dummy=True,
+        )
+
+        # ---- 出力デバッグパネル（左列） ----
+        self._draw_output_debug(
+            x=40, y=180,
+            bits4=manual_bits4,
+            audio_on=audio_on,
+            waveform=waveform,
+        )
+
+        # ---- 入力デバッグパネル（右列） ----
+        self._draw_input_debug(
+            x=SCREEN_W // 2 + 40, y=180,
+            mic_data=mic_data,
+            expected_bits4=manual_bits4,
+        )
+
+        # ---- キーヒント ----
+        hints = [
+            "0～9 / a～f: 手動パルス入力    V: 音声ON/OFF    ESC/M: メニューへ戻る",
+        ]
+        for i, h in enumerate(hints):
+            ht = self.font_s.render(h, True, C_GRAY)
+            self.screen.blit(ht, (SCREEN_W // 2 - ht.get_width() // 2,
+                                  SCREEN_H - 25 + i * 18))
+
+    def _draw_output_debug(self, x: int, y: int, bits4: int,
+                           audio_on: bool, waveform):
+        """OUTPUT DEBUGパネル。"""
+        import numpy as np
+        from config import (
+            PHONEME_TABLE, PHONEME_FORMANTS, PHONEME_CONSONANT, PHONEME_VOWEL,
+            AUDIO_FRAME_SAMPLES,
+        )
+
+        W, H = SCREEN_W // 2 - 60, 460
+        bg = pygame.Surface((W, H), pygame.SRCALPHA)
+        bg.fill((5, 5, 15, 230))
+        self.screen.blit(bg, (x, y))
+        pygame.draw.rect(self.screen, (255, 120, 180), (x, y, W, H), 1, border_radius=6)
+
+        title = self.font_m.render("OUTPUT DEBUG", True, (255, 120, 180))
+        self.screen.blit(title, (x + 8, y + 8))
+
+        # bits4 をビット列に分解
+        bits_list = [(bits4 >> (3 - i)) & 1 for i in range(4)]
+        consonant_bits = (bits4 >> 2) & 0x3
+        vowel_bits     = bits4 & 0x3
+        phoneme_char   = PHONEME_TABLE.get(bits4, "?")
+        vowel_char     = PHONEME_VOWEL.get(vowel_bits, "?")
+        consonant_char = PHONEME_CONSONANT.get(consonant_bits)
+        f1, f2         = PHONEME_FORMANTS.get(vowel_char, (0, 0))
+
+        # パルスビット表示
+        bx0 = x + 8
+        by0 = y + 32
+        for i, bit in enumerate(bits_list):
+            bx = bx0 + i * 36
+            c = C_PULSE_ON if bit else C_PULSE_OFF
+            pygame.draw.rect(self.screen, c, (bx, by0, 28, 28))
+            pygame.draw.rect(self.screen, C_GRAY, (bx, by0, 28, 28), 1)
+            bt = self.font_m.render(str(bit), True, C_WHITE if bit else C_GRAY)
+            self.screen.blit(bt, (bx + 14 - bt.get_width() // 2, by0 + 5))
+
+        # 音素情報
+        ry = by0 + 40
+        rows = [
+            ("Phoneme",   f"「{phoneme_char}」"),
+            ("F1",        f"{f1} Hz"),
+            ("F2",        f"{f2} Hz"),
+            ("Consonant", str(consonant_char) if consonant_char else "(none)"),
+            ("Vowel",     vowel_char),
+        ]
+        for label, val in rows:
+            lt = self.font_s.render(f"{label}:", True, C_GRAY)
+            vt = self.font_m.render(val, True, C_WHITE)
+            self.screen.blit(lt, (x + 8, ry))
+            self.screen.blit(vt, (x + 120, ry - 2))
+            ry += 26
+
+        # 波形プレビュー
+        ry += 8
+        wh = H - (ry - y) - 12
+        ww = W - 16
+        pygame.draw.rect(self.screen, (15, 15, 25), (x + 8, ry, ww, wh))
+        pygame.draw.rect(self.screen, (50, 50, 70), (x + 8, ry, ww, wh), 1)
+
+        if waveform is not None and len(waveform) > 0:
+            # ダウンサンプルして描画
+            n_draw = min(ww, len(waveform))
+            step   = max(1, len(waveform) // n_draw)
+            pts    = []
+            for j in range(n_draw):
+                sv = float(waveform[j * step])
+                px = x + 8 + j
+                py = int(ry + wh // 2 - sv * (wh // 2 - 2))
+                py = max(ry, min(ry + wh - 1, py))
+                pts.append((px, py))
+            if len(pts) > 1:
+                pygame.draw.lines(self.screen, (100, 200, 255), False, pts, 1)
+            wt = self.font_s.render("waveform", True, (60, 80, 100))
+            self.screen.blit(wt, (x + 10, ry + 2))
+        else:
+            nt = self.font_s.render("[play to preview]", True, (60, 80, 100))
+            self.screen.blit(nt, (x + 8 + ww // 2 - nt.get_width() // 2,
+                                  ry + wh // 2 - 6))
+
+    def _draw_input_debug(self, x: int, y: int,
+                          mic_data: dict | None, expected_bits4: int):
+        """INPUT DEBUGパネル。"""
+        from config import PHONEME_TABLE
+
+        W, H = SCREEN_W // 2 - 60, 460
+        bg = pygame.Surface((W, H), pygame.SRCALPHA)
+        bg.fill((5, 15, 5, 230))
+        self.screen.blit(bg, (x, y))
+        pygame.draw.rect(self.screen, (80, 220, 120), (x, y, W, H), 1, border_radius=6)
+
+        title = self.font_m.render("INPUT DEBUG", True, (80, 220, 120))
+        self.screen.blit(title, (x + 8, y + 8))
+
+        if mic_data is None or not mic_data.get("available", False):
+            # マイク不可
+            nt = self.font_m.render("MIC UNAVAILABLE", True, (200, 80, 80))
+            self.screen.blit(nt, (x + W // 2 - nt.get_width() // 2,
+                                  y + H // 2 - 10))
+            st = self.font_s.render(
+                "pyaudioマイクが検出できませんでした", True, C_GRAY)
+            self.screen.blit(st, (x + W // 2 - st.get_width() // 2, y + H // 2 + 20))
+            return
+
+        ry = y + 36
+        decoded_bits = mic_data.get("decoded_bits", 0)
+        expected_char = PHONEME_TABLE.get(expected_bits4, "?")
+        decoded_char  = PHONEME_TABLE.get(decoded_bits, "?")
+        match = (decoded_bits == expected_bits4)
+
+        rows = [
+            ("Detected F1", f"{mic_data.get('f1', 0):.0f} Hz"),
+            ("Detected F2", f"{mic_data.get('f2', 0):.0f} Hz"),
+            ("Vowel",       mic_data.get("vowel", "?"),),
+            ("Consonant",   str(mic_data.get("consonant", "?"))),
+        ]
+        for label, val in rows:
+            lt = self.font_s.render(f"{label}:", True, C_GRAY)
+            vt = self.font_m.render(val, True, C_WHITE)
+            self.screen.blit(lt, (x + 8, ry))
+            self.screen.blit(vt, (x + 140, ry - 2))
+            ry += 26
+
+        ry += 8
+        # Decoded bits
+        bits_list = [(decoded_bits >> (3 - i)) & 1 for i in range(4)]
+        dt = self.font_s.render("Decoded:", True, C_GRAY)
+        self.screen.blit(dt, (x + 8, ry))
+        for i, bit in enumerate(bits_list):
+            bx = x + 100 + i * 32
+            c = C_PULSE_ON if bit else C_PULSE_OFF
+            pygame.draw.rect(self.screen, c, (bx, ry - 2, 24, 24))
+            pygame.draw.rect(self.screen, C_GRAY, (bx, ry - 2, 24, 24), 1)
+            bt = self.font_s.render(str(bit), True, C_WHITE if bit else C_GRAY)
+            self.screen.blit(bt, (bx + 12 - bt.get_width() // 2, ry + 3))
+        dc = self.font_m.render(f"「{decoded_char}」", True, C_WHITE)
+        self.screen.blit(dc, (x + 240, ry - 2))
+        ry += 34
+
+        # Expected bits
+        exp_bits_list = [(expected_bits4 >> (3 - i)) & 1 for i in range(4)]
+        et = self.font_s.render("Expected:", True, C_GRAY)
+        self.screen.blit(et, (x + 8, ry))
+        for i, bit in enumerate(exp_bits_list):
+            bx = x + 100 + i * 32
+            c = (80, 120, 200) if bit else C_PULSE_OFF
+            pygame.draw.rect(self.screen, c, (bx, ry - 2, 24, 24))
+            pygame.draw.rect(self.screen, C_GRAY, (bx, ry - 2, 24, 24), 1)
+            bt = self.font_s.render(str(bit), True, C_WHITE if bit else C_GRAY)
+            self.screen.blit(bt, (bx + 12 - bt.get_width() // 2, ry + 3))
+        ec = self.font_m.render(f"「{expected_char}」", True, (180, 180, 220))
+        self.screen.blit(ec, (x + 240, ry - 2))
+        ry += 34
+
+        # Match
+        match_c = (80, 220, 100) if match else (220, 80, 80)
+        match_sym = "✓ MATCH" if match else "✗ MISMATCH"
+        mt = self.font_m.render(f"Match: {match_sym}", True, match_c)
+        self.screen.blit(mt, (x + 8, ry))
+
+    # ================================================================
     def draw_overlay(self, text: str, color=C_WHITE):
         """画面中央にオーバーレイテキストを表示する。"""
         t = self.font_l.render(text, True, color)

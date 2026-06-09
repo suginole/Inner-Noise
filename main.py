@@ -25,6 +25,7 @@ class GameState:
     GA_FAST_CFG = "ga_fast_cfg" # 高速モード設定画面
     GA_FAST     = "ga_fast"     # 高速学習モード（描画完全スキップ）
     LOAD        = "load"        # モデルロード画面
+    BACKROOM    = "backroom"    # 音声入出力確認・デバッグモード
 
 
 # カメラ切替閖値
@@ -86,6 +87,13 @@ class Game:
         self.done_message: str = ""
         self.done_timer:   int = 0
 
+        # バックルームモード状態
+        self.br_bits4:      int = 0          # 手動入力された4bits値
+        self.br_waveform    = None           # 直近の合成波形
+        self.br_mic_data:   dict | None = None  # マイク解析結果
+        self.br_bn:         Bottleneck = Bottleneck()  # バックルーム専用BN
+        self.br_mic_thread_running: bool = False
+
         # DB初期化
         save_manager.init_db()
 
@@ -114,6 +122,116 @@ class Game:
             car = Car(*self.field.start_pos)
             agent = GAAgent(car, self.field, genome)
             self.ga_agents.append(agent)
+
+    # ----------------------------------------------------------------
+    def init_backroom_mode(self):
+        """バックルームモードを初期化する。"""
+        self.br_bits4    = 0
+        self.br_waveform = None
+        self.br_mic_data = None
+        self.br_bn       = Bottleneck()
+        # マイクスレッドを開始
+        self._start_mic_thread()
+
+    def _start_mic_thread(self):
+        """PhonemeDecoderを別スレッドで定期実行する。"""
+        import threading
+        if self.br_mic_thread_running:
+            return
+        self.br_mic_thread_running = True
+
+        def _mic_worker():
+            from game.phoneme import PhonemeDecoder
+            from scipy.fft import rfft, rfftfreq
+            from config import AUDIO_SAMPLE_RATE, PHONEME_VOWEL, PHONEME_CONSONANT
+            import numpy as np
+
+            dec = PhonemeDecoder()
+            if not dec.available:
+                self.br_mic_data = {
+                    "available": False,
+                    "f1": 0, "f2": 0,
+                    "vowel": "", "consonant": "",
+                    "decoded_bits": 0,
+                }
+                self.br_mic_thread_running = False
+                return
+
+            while self.br_mic_thread_running:
+                frame = dec.record_frame()
+                decoded = dec.decode(frame)
+
+                # F1/F2ピーク周波数を計算
+                n = len(frame)
+                spec  = np.abs(rfft(frame))
+                freqs = rfftfreq(n, d=1.0 / AUDIO_SAMPLE_RATE)
+
+                def peak_freq(lo, hi):
+                    mask = (freqs >= lo) & (freqs <= hi)
+                    if not np.any(mask): return 0.0
+                    return float(freqs[mask][np.argmax(spec[mask])])
+
+                f1 = peak_freq(200, 1000)
+                f2 = peak_freq(1000, 2600)
+
+                vowel_bits     = decoded & 0x3
+                consonant_bits = (decoded >> 2) & 0x3
+                vowel_char     = PHONEME_VOWEL.get(vowel_bits, "?")
+                consonant_char = PHONEME_CONSONANT.get(consonant_bits)
+
+                self.br_mic_data = {
+                    "available":    True,
+                    "f1":           f1,
+                    "f2":           f2,
+                    "vowel":        vowel_char,
+                    "consonant":    str(consonant_char) if consonant_char else "(none)",
+                    "decoded_bits": decoded,
+                }
+
+        t = threading.Thread(target=_mic_worker, daemon=True)
+        t.start()
+
+    def _stop_mic_thread(self):
+        self.br_mic_thread_running = False
+
+    def _update_backroom(self, dt: float):
+        """バックルームモードの更新。"""
+        self.br_bn.tick(dt)
+
+    def _handle_backroom_key(self, key):
+        """バックルームモードのキー入力処理。"""
+        # ESC / M: メニューへ
+        if key in (pygame.K_ESCAPE, pygame.K_m):
+            self._stop_mic_thread()
+            self.state = GameState.MENU
+            return
+
+        # V: 音声ON/OFF
+        if key == pygame.K_v:
+            self.br_bn.toggle_audio()
+            return
+
+        # 0～9 / a～f: 4bits手動入力
+        hex_map = {
+            pygame.K_0: 0,  pygame.K_1: 1,  pygame.K_2: 2,  pygame.K_3: 3,
+            pygame.K_4: 4,  pygame.K_5: 5,  pygame.K_6: 6,  pygame.K_7: 7,
+            pygame.K_8: 8,  pygame.K_9: 9,
+            pygame.K_a: 10, pygame.K_b: 11, pygame.K_c: 12,
+            pygame.K_d: 13, pygame.K_e: 14, pygame.K_f: 15,
+        }
+        if key in hex_map:
+            bits4 = hex_map[key]
+            self.br_bits4 = bits4
+            # 波形を合成
+            from game.phoneme import PhonemeConverter
+            conv = PhonemeConverter()
+            self.br_waveform = conv.synthesize(bits4)
+            # 音声が有効なら再生
+            if self.br_bn.audio_enabled:
+                conv.play(bits4)
+            elif self.br_bn.converter is None:
+                # 音声無効でも波形だけ生成
+                pass
 
     # ----------------------------------------------------------------
     def _do_save(self, auto: bool = False):
@@ -313,6 +431,12 @@ class Game:
                     self.state = GameState.GA_FAST_CFG
                 elif event.key == pygame.K_l:
                     self._open_load_screen()
+                elif event.key == pygame.K_o:
+                    self.init_backroom_mode()
+                    self.state = GameState.BACKROOM
+
+            elif self.state == GameState.BACKROOM:
+                self._handle_backroom_key(event.key)
 
             elif self.state == GameState.LOAD:
                 if event.key in (pygame.K_ESCAPE, pygame.K_m):
@@ -402,6 +526,8 @@ class Game:
             self._update_player(dt)
         elif self.state == GameState.GA:
             self._update_ga_monitor(dt)
+        elif self.state == GameState.BACKROOM:
+            self._update_backroom(dt)
 
     def _update_player(self, dt: float):
         if not self.player_car.alive:
@@ -462,6 +588,16 @@ class Game:
         if self.state == GameState.LOAD:
             self.renderer.draw_load_screen(
                 self.load_models, self.load_sel_idx, self.load_error)
+            return
+
+        if self.state == GameState.BACKROOM:
+            self.renderer.draw_backroom(
+                bottleneck=self.br_bn,
+                manual_bits4=self.br_bits4,
+                audio_on=self.br_bn.audio_enabled,
+                waveform=self.br_waveform,
+                mic_data=self.br_mic_data,
+            )
             return
 
         if self.state == GameState.MENU:
