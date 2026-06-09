@@ -65,6 +65,9 @@ class Game:
         # 前世代の最高適応度ゲノムのスナップショット
         self.prev_best_genome: GAGenome | None = None
 
+        # 追従中エージェント（更新・音声・モニター描画を共通の参照に統一）
+        self.tracked_agent: 'GAAgent | None' = None
+
         # 音声入出力用ボトルネック（GAモード共有）
         self.audio_bn: Bottleneck = Bottleneck()
 
@@ -123,6 +126,7 @@ class Game:
 
     def _spawn_ga_agents(self):
         self.ga_agents = []
+        self.tracked_agent = None  # 世代更新時に追従先をリセット
         for genome in self.ga.population:
             car = Car(*self.field.start_pos)
             # 各エージェントに独立した餅セットを渡す。
@@ -510,14 +514,15 @@ class Game:
                 elif event.key == pygame.K_v:
                     # 音声ON/OFF切替
                     new_state = self.audio_bn.toggle_audio()
-                    # 全エージェントのRNNBottleneckにも反映
+                    # 全エージェントのbnを一度全部オフにしてから、
+                    # tracked_agentのみに音声を属当する
                     for ag in self.ga_agents:
                         if hasattr(ag, 'bn'):
-                            if new_state:
-                                ag.bn.audio_enabled = True
-                                ag.bn.converter     = self.audio_bn.converter
-                            else:
-                                ag.bn.audio_enabled = False
+                            ag.bn.audio_enabled = False
+                    if new_state and self.tracked_agent is not None:
+                        if hasattr(self.tracked_agent, 'bn'):
+                            self.tracked_agent.bn.audio_enabled = True
+                            self.tracked_agent.bn.converter     = self.audio_bn.converter
                 elif event.key == pygame.K_TAB:
                     if self.ga is None:
                         self.init_ga_mode(pop_size=self.fast_cfg_pop_size)
@@ -581,19 +586,34 @@ class Game:
             self.done_timer = FPS * 3
 
     def _update_ga_monitor(self, dt: float):
-        """監視モード（通常速度）のGA更新。"""
+        """監視モード（通常速度）のGA更新。
+        追従エージェントをself.tracked_agentに導出・維持し、
+        音声・モニター描画と同じエージェントを参照する。
+        """
         if not self.ga_running:
             return
         self._step_ga_once()
-        # 音声出力: 最優秀エージェントのRNNBottleneckがパルス消化時に鳴らす
-        # audio_bn（ダミー）は使わない
+
+        # 追従エージェントを決定する（生存中の最高報酬）
         alive_agents = [ag for ag in self.ga_agents if ag.car.alive]
         if alive_agents:
-            best_ag = max(alive_agents, key=lambda ag: ag.total_reward)
-            if self.audio_bn.audio_enabled and hasattr(best_ag, 'bn'):
-                # 最優秀エージェントのbnに音声を属成
-                best_ag.bn.audio_enabled = True
-                best_ag.bn.converter     = self.audio_bn.converter
+            new_best = max(alive_agents, key=lambda ag: ag.total_reward)
+        else:
+            new_best = None
+
+        # 追従先が変わった場合、旧追従先の音声を必ずオフにしてから切り替える
+        if self.tracked_agent is not new_best:
+            if self.tracked_agent is not None and hasattr(self.tracked_agent, 'bn'):
+                self.tracked_agent.bn.audio_enabled = False
+            self.tracked_agent = new_best
+
+        # 追従エージェントに音声を属当（音声ON時のみ）
+        if self.tracked_agent is not None and hasattr(self.tracked_agent, 'bn'):
+            if self.audio_bn.audio_enabled:
+                self.tracked_agent.bn.audio_enabled = True
+                self.tracked_agent.bn.converter     = self.audio_bn.converter
+            else:
+                self.tracked_agent.bn.audio_enabled = False
 
     # ----------------------------------------------------------------
     def _get_camera_focus(self) -> pygame.Vector2:
@@ -605,6 +625,9 @@ class Game:
             cy = sum(ag.car.pos.y for ag in alive_agents) / len(alive_agents)
             return pygame.Vector2(cx, cy)
         else:
+            # tracked_agentが生存中ならそれを優先、そうでなければ最高報酬で再計算
+            if self.tracked_agent is not None and self.tracked_agent.car.alive:
+                return pygame.Vector2(self.tracked_agent.car.pos)
             best = max(alive_agents, key=lambda ag: ag.total_reward)
             return pygame.Vector2(best.car.pos)
 
@@ -685,7 +708,10 @@ class Game:
 
     # ----------------------------------------------------------------
     def _draw_ga_monitor(self):
-        """通常GAモードの描画。"""
+        """通常GAモードの描画。
+        追従エージェントはself.tracked_agentを使用し、
+        更新・音声と同じエージェントを参照する。
+        """
         focus = self._get_camera_focus()
         cam   = self.renderer.calc_camera(focus)
 
@@ -693,39 +719,40 @@ class Game:
         self._ensure_minimap()
 
         alive_count = 0
-        best_agent  = None
         for ag in self.ga_agents:
             if not ag.car.alive:
                 continue
             alive_count += 1
-            if best_agent is None or ag.total_reward > best_agent.total_reward:
-                best_agent = ag
             ag.car.draw(self.screen, cam, color=(40, 100, 160))
 
-        if best_agent:
-            self.renderer.draw_vision_cone(best_agent.car, cam)
-            best_agent.car.draw(self.screen, cam, color=(255, 200, 50))
+        # tracked_agentを追従エージェントとして使用
+        tracked = self.tracked_agent
+        if tracked and tracked.car.alive:
+            self.renderer.draw_vision_cone(tracked.car, cam)
+            tracked.car.draw(self.screen, cam, color=(255, 200, 50))
             if alive_count <= CAMERA_SWITCH_THRESHOLD:
-                self._draw_tracking_indicator(best_agent.car, cam)
+                self._draw_tracking_indicator(tracked.car, cam)
 
         self.renderer.draw_minimap(self.field, focus, self.field.goal_pos)
-        self._draw_ga_overlay(alive_count, best_agent)
+        self._draw_ga_overlay(alive_count, tracked)
         self.renderer.draw_fitness_graph(self.ga, 20, 150, w=280, h=100)
 
-        # アクティベーションモニター: 常に現在最優秀個体の本物を表示
-        display_genome = None
-        if best_agent:
-            display_genome = best_agent.genome
+        # アクティベーションモニター: tracked_agentのゲノムとbnを使用
+        if tracked and tracked.car.alive:
+            display_genome = tracked.genome
+            bn_for_panel   = tracked.bn if hasattr(tracked, 'bn') else self.audio_bn
         elif self.prev_best_genome is not None:
             display_genome = self.prev_best_genome
+            bn_for_panel   = self.audio_bn
+        else:
+            display_genome = None
+            bn_for_panel   = self.audio_bn
 
         if display_genome is not None:
             # 3パネルモニター（画面下部中央）
-            total_w = 280 * 3 + 8 * 2   # 3パネル + 間隔
+            total_w = 280 * 3 + 8 * 2
             mx = SCREEN_W // 2 - total_w // 2
             my = SCREEN_H - 230
-            # 現在最優秀エージェントの RNNBottleneck を使用
-            bn_for_panel = best_agent.bn if best_agent and hasattr(best_agent, 'bn') else self.audio_bn
             self.renderer.draw_rnn_monitor_panels(
                 display_genome, bn_for_panel,
                 x=mx, y=my, panel_w=280, panel_h=220)
