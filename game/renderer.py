@@ -304,11 +304,14 @@ class Renderer:
                               pulse_state: list[int] | None = None,
                               history: list[list[int]] | None = None,
                               mode: str = "listen",
-                              turn_progress: float = 0.0):
+                              turn_progress: float = 0.0,
+                              phoneme: str = "",
+                              audio_on: bool = False,
+                              is_dummy: bool = True):
         """
-        ボトルネック通信路のダミー可視化パネル。
+        ボトルネック通信路の可視化パネル。
 
-        将来のRNN実装時はこの関数の引数を実際のパルスデータに差し替えるだけでよい。
+        将来のRNN実装時は引数を実際のパルスデータに差し替えるだけでよい。
 
         Args:
             x, y: 描画座標
@@ -316,6 +319,9 @@ class Renderer:
             history: 直近20パルスの履歴 (Noneの場合はダミー)
             mode: "listen" | "speak"
             turn_progress: ターン進捗 0.0～1.0
+            phoneme: 現在の音素文字列（例: 'ま'）
+            audio_on: 音声出力が有効かどうか
+            is_dummy: Trueの場合は [DUMMY] ラベルを表示
         """
         import random
         W = 260
@@ -327,8 +333,9 @@ class Renderer:
         pygame.draw.rect(self.screen, (80, 60, 20), (x, y, W, H), 1)
 
         # タイトル
+        dummy_tag = "  [DUMMY]" if is_dummy else ""
         title = self.font_s.render(
-            "BOTTLENECK  5Hz / 4bits  [DUMMY]", True, (180, 140, 60))
+            f"BOTTLENECK  5Hz / 4bits{dummy_tag}", True, (180, 140, 60))
         self.screen.blit(title, (x + 4, y + 3))
 
         # ダミーパルス状態（ランダム点滅）
@@ -375,6 +382,17 @@ class Renderer:
                 by = y + 40 + bi * 9
                 c = C_PULSE_ON if bit else C_PULSE_OFF
                 pygame.draw.rect(self.screen, c, (bx, by, 7, 7))
+
+        # 音素表示
+        if phoneme:
+            ph_t = self.font_m.render(f"「{phoneme}」", True, (255, 220, 100))
+            self.screen.blit(ph_t, (x + 4, y + H - 20))
+
+        # 音声出力インジケーター
+        audio_c = (80, 220, 100) if audio_on else (100, 100, 120)
+        audio_sym = "● ON" if audio_on else "○ OFF"
+        audio_t = self.font_s.render(f"V: 音声 {audio_sym}", True, audio_c)
+        self.screen.blit(audio_t, (x + W - audio_t.get_width() - 4, y + H - 16))
 
     # ----------------------------------------------------------------
     def draw_load_screen(self, models: list[dict], selected_idx: int,

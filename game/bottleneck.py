@@ -49,6 +49,14 @@ class Bottleneck:
         self._pulse_history: list[list[int]] = []
         self._current_pulse: list[int] = [0, 0, 0, 0]
 
+        # ---- 音声変換フック ----
+        # audio_enabled=Trueにするとパルス発火時にPhonemeConverter.play()を呼ぶ
+        # 将来のRNN実装後もこのフックは差し替え不要
+        self.audio_enabled: bool = False
+        self.converter = None   # PhonemeConverterインスタンス（遅延初期化）
+        self.decoder   = None   # PhonemeDecoderインスタンス（遅延初期化）
+        self._last_phoneme: str = ""   # 直近の音素（HUD表示用）
+
     # ----------------------------------------------------------------
     def push(self, obs: list[float]) -> None:
         """感覚系から観測ベクトルを受け取る。"""
@@ -79,6 +87,10 @@ class Bottleneck:
             if len(self._pulse_history) > BN_PULSES_PER_TURN:
                 self._pulse_history.pop(0)
             self._current_pulse = pulse
+
+            # 音声変換フック
+            bits4 = (pulse[0] << 3) | (pulse[1] << 2) | (pulse[2] << 1) | pulse[3]
+            self.on_pulse_emit(bits4)
 
             # 発話ターンのパルスから行動を更新
             if self._mode == "speak":
@@ -126,6 +138,67 @@ class Bottleneck:
             max(0.0, min(1.0, steer)),
             max(0.0, min(1.0, brake)),
         ]
+
+    # ----------------------------------------------------------------
+    # ----------------------------------------------------------------
+    # 音声変換フック（将来のRNN実装後も差し替え不要）
+    # ----------------------------------------------------------------
+    def on_pulse_emit(self, bits4: int) -> None:
+        """パルス送信時に呼ばれるフック。
+        audio_enabled=Trueの場合は PhonemeConverter.play() を呼び出す。
+        """
+        if self.audio_enabled and self.converter is not None:
+            try:
+                self._last_phoneme = self.converter.pulse_to_phoneme(bits4)
+                self.converter.play(bits4)
+            except Exception:
+                pass
+        else:
+            # 音声無効時も音素文字だけ更新
+            from config import PHONEME_TABLE
+            self._last_phoneme = PHONEME_TABLE.get(bits4 & 0xF, "")
+
+    def on_pulse_receive(self, frame) -> int:
+        """マイク入力時に呼ばれるフック。
+        audio_enabled=Trueの場合は PhonemeDecoder.decode() を呼び出す。
+        Returns: 復元された 4bits整数
+        """
+        if self.audio_enabled and self.decoder is not None:
+            try:
+                return self.decoder.decode(frame)
+            except Exception:
+                pass
+        return 0
+
+    def enable_audio(self) -> None:
+        """音声変換を有効化する。PhonemeConverter/Decoderを遅延初期化する。"""
+        if self.audio_enabled:
+            return
+        try:
+            from game.phoneme import PhonemeConverter, PhonemeDecoder
+            if self.converter is None:
+                self.converter = PhonemeConverter()
+            if self.decoder is None:
+                self.decoder = PhonemeDecoder()
+            self.audio_enabled = True
+        except Exception as e:
+            print(f"[Bottleneck] audio enable failed: {e}")
+
+    def disable_audio(self) -> None:
+        """音声変換を無効化する。"""
+        self.audio_enabled = False
+
+    def toggle_audio(self) -> bool:
+        """音声ON/OFFを切り替える。結果の状態を返す。"""
+        if self.audio_enabled:
+            self.disable_audio()
+        else:
+            self.enable_audio()
+        return self.audio_enabled
+
+    def get_last_phoneme(self) -> str:
+        """直近の音素文字列を返す（HUD表示用）。"""
+        return self._last_phoneme
 
     # ----------------------------------------------------------------
     def get_action(self) -> list[float]:

@@ -63,6 +63,9 @@ class Game:
         # 前世代の最高適応度ゲノムのスナップショット
         self.prev_best_genome: GAGenome | None = None
 
+        # 音声入出力用ボトルネック（GAモード共有）
+        self.audio_bn: Bottleneck = Bottleneck()
+
         # 高速モード設定
         self.fast_cfg_goal_count: int = 10   # 終了条件（1〜10）
         self.fast_cfg_pop_size:   int = GA_POP_SIZE
@@ -350,6 +353,9 @@ class Game:
                         self.state = GameState.MENU
                 elif event.key == pygame.K_s:
                     self._do_save(auto=False)
+                elif event.key == pygame.K_v:
+                    # 音声ON/OFF切替
+                    self.audio_bn.toggle_audio()
                 elif event.key == pygame.K_TAB:
                     if self.ga is None:
                         self.init_ga_mode(pop_size=self.fast_cfg_pop_size)
@@ -415,6 +421,8 @@ class Game:
         if not self.ga_running:
             return
         self._step_ga_once()
+        # 音声ボトルネックをティック（パルス発火・音声出力）
+        self.audio_bn.tick(dt)
 
     # ----------------------------------------------------------------
     def _get_camera_focus(self) -> pygame.Vector2:
@@ -534,12 +542,24 @@ class Game:
                 display_genome,
                 x=SCREEN_W - 510, y=SCREEN_H - 230)
 
-        # ボトルネックダミーパネル（アクティベーションモニターの左隣）
+        # ボトルネックパネル（アクティベーションモニターの左隣）
+        # audio_bnの実データを渡す（パルス・音素・音声ON/OFF）
+        bn = self.audio_bn
+        bn_pulse = bn.get_current_pulse()
+        bn_history = bn.get_pulse_history()
         self.renderer.draw_bottleneck_dummy(
-            x=SCREEN_W - 510 - 270, y=SCREEN_H - 105)
+            x=SCREEN_W - 510 - 270, y=SCREEN_H - 105,
+            pulse_state=bn_pulse,
+            history=bn_history,
+            mode=bn.get_mode(),
+            turn_progress=bn.get_turn_progress(),
+            phoneme=bn.get_last_phoneme(),
+            audio_on=bn.audio_enabled,
+            is_dummy=True,   # RNN実装後はFalseに変更
+        )
 
         hint = self.renderer.font_s.render(
-            "S: Save  Tab: Fast Mode  M: Menu  ESC: Quit", True, C_GRAY)
+            "S: Save  V: Audio  Tab: Fast Mode  M: Menu  ESC: Quit", True, C_GRAY)
         self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 20))
 
     def _draw_snapshot_label(self):

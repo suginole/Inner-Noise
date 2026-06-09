@@ -101,3 +101,48 @@ C_ENERGY_LO    = (220,  80,  60)
 C_WHITE        = (255, 255, 255)
 C_GRAY         = (120, 120, 120)
 C_DARK         = (30,   30,  40)
+
+# ---- 音素テーブル（4bits = 上位2bits調音 × 下位2bits母音） ----
+# 将来の音素追加・変更はここを編集するだけでよい
+
+PHONEME_CONSONANT = {
+    0b00: None,  # クリーン（子音なし）
+    0b01: 's',   # 無声摩擦音
+    0b10: 'n',   # 鼻音（歯茎）
+    0b11: 'm',   # 鼻音（両唇）
+}
+
+PHONEME_VOWEL = {
+    0b00: 'u',   # う（F1低・F2低）
+    0b01: 'i',   # い（F1低・F2高）
+    0b10: 'o',   # お（F1中・F2低）
+    0b11: 'a',   # あ（F1高・F2中）
+}
+
+# 母音フォルマント周波数 (Hz)
+PHONEME_FORMANTS = {
+    'a': (800,  1200),
+    'i': (300,  2300),
+    'u': (300,   800),
+    'o': (500,   800),
+}
+
+# 全16音素テーブル（表示用）
+PHONEME_TABLE = {
+    0b0000: 'う', 0b0001: 'い', 0b0010: 'お', 0b0011: 'あ',
+    0b0100: 'す', 0b0101: 'し', 0b0110: 'そ', 0b0111: 'さ',
+    0b1000: 'ぬ', 0b1001: 'に', 0b1010: 'の', 0b1011: 'な',
+    0b1100: 'む', 0b1101: 'み', 0b1110: 'も', 0b1111: 'ま',
+}
+
+# 音声合成パラメータ
+AUDIO_SAMPLE_RATE  = 22050   # Hz
+AUDIO_FRAME_MS     = 200     # ms（5Hzパルスに同期）
+AUDIO_FRAME_SAMPLES = int(AUDIO_SAMPLE_RATE * AUDIO_FRAME_MS / 1000)  # = 4410
+
+# 調音パラメータ
+AUDIO_SIBILANT_FREQ   = 1500   # s: このHz以上のノイズを付加
+AUDIO_SIBILANT_MS     = 20     # s: ノイズ付加区間（ms）
+AUDIO_NASAL_FREQ      = 275    # n/m: 鼻腔共鳴周波数（Hz）
+AUDIO_NASAL_GAIN      = 0.3    # n/m: 鼻腔共鳴の振幅比
+AUDIO_BILABIAL_MS     = 10     # m: 冒頭無音区間（ms）
