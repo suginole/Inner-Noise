@@ -781,6 +781,255 @@ class Renderer:
         self.screen.blit(mt, (x + 8, ry))
 
     # ================================================================
+    # RNNボトルネック3パネルモニター
+    # ================================================================
+    def draw_rnn_monitor_panels(self, genome, bottleneck,
+                                x: int = 0, y: int = 0,
+                                panel_w: int = 280, panel_h: int = 220):
+        """
+        3パネル横並びモニター。
+        左: SENSORY NN（青系）
+        中: BOTTLENECK（黄白系）
+        右: MOTOR NN（赤系）
+
+        Args:
+            genome:     GAGenome インスタンス
+            bottleneck: RNNBottleneck または Bottleneck インスタンス
+            x, y:       左端の描画座標
+            panel_w/h:  各パネルのサイズ
+        """
+        gap = 8
+        cx_bn = x + panel_w + gap
+        cx_motor = x + (panel_w + gap) * 2
+
+        # ---- 左パネル: SENSORY NN ----
+        self._draw_sensory_panel(genome, x, y, panel_w, panel_h)
+
+        # ---- 中央パネル: BOTTLENECK ----
+        self._draw_bottleneck_panel(bottleneck, cx_bn, y, panel_w, panel_h)
+
+        # ---- 右パネル: MOTOR NN ----
+        self._draw_motor_panel(genome, cx_motor, y, panel_w, panel_h)
+
+        # ---- 接続矢印 ----
+        mode = bottleneck.get_mode() if hasattr(bottleneck, 'get_mode') else 'listen'
+        self._draw_flow_arrows(x, y, panel_w, panel_h, gap, mode)
+
+    def _draw_sensory_panel(self, genome, x, y, w, h):
+        """左パネル: SENSORY NN（青系）"""
+        bg = pygame.Surface((w, h), pygame.SRCALPHA)
+        bg.fill((5, 10, 30, 220))
+        self.screen.blit(bg, (x, y))
+        pygame.draw.rect(self.screen, (60, 100, 200), (x, y, w, h), 1, border_radius=4)
+
+        title = self.font_s.render("SENSORY NN", True, (100, 160, 255))
+        self.screen.blit(title, (x + 6, y + 4))
+
+        inp_acts  = getattr(genome, 'last_input_act',  [0.0] * 12)
+        gru_acts  = getattr(genome, 'last_sensory_gru', [0.0] * 16)
+
+        inp_labels = ["E","Ga","Gx","Gy","Fx","Fy"] + \
+                     [f"R{i}" for i in range(VISION_RAYS)] + ["Fc"]
+
+        node_r  = 5
+        node_gap = 12
+        col_inp = x + 28
+        col_gru = x + w - 30
+        row_top = y + 18
+
+        def _bipolar_color(v):
+            if v >= 0:
+                t = min(1.0, v)
+                return (int(40 + 215 * t), int(40 * (1-t)), 40)
+            else:
+                t = min(1.0, -v)
+                return (40, int(40 * (1-t)), int(40 + 215 * t))
+
+        def _unipolar_color(v):
+            t = max(0.0, min(1.0, v))
+            return (int(30 + 200 * t), int(30 + 200 * t), int(30 + 60 * t))
+
+        # INPUT列
+        n_inp = len(inp_acts)
+        sy_inp = row_top + max(0, (h - 28 - n_inp * node_gap) // 2)
+        for i, v in enumerate(inp_acts):
+            ny = sy_inp + i * node_gap
+            c = _unipolar_color(v)
+            pygame.draw.circle(self.screen, c, (col_inp, ny), node_r)
+            pygame.draw.circle(self.screen, (50, 80, 150), (col_inp, ny), node_r, 1)
+            if i < len(inp_labels):
+                lt = self.font_s.render(inp_labels[i], True, (70, 100, 160))
+                self.screen.blit(lt, (col_inp - node_r - lt.get_width() - 2, ny - 5))
+
+        # GRU列
+        n_gru = len(gru_acts)
+        sy_gru = row_top + max(0, (h - 28 - n_gru * node_gap) // 2)
+        for i, v in enumerate(gru_acts):
+            ny = sy_gru + i * node_gap
+            c = _bipolar_color(v)
+            pygame.draw.circle(self.screen, c, (col_gru, ny), node_r)
+            pygame.draw.circle(self.screen, (50, 80, 150), (col_gru, ny), node_r, 1)
+
+        # 凡例
+        leg = self.font_s.render("赤=+ 暗=0 青=-", True, (80, 100, 160))
+        self.screen.blit(leg, (x + 4, y + h - 14))
+
+        # 列ラベル
+        for lbl, lx, lc in [("INPUT", col_inp, (80,120,220)), ("GRU", col_gru, (100,140,220))]:
+            lt = self.font_s.render(lbl, True, lc)
+            self.screen.blit(lt, (lx - lt.get_width() // 2, y + h - 14))
+
+    def _draw_bottleneck_panel(self, bottleneck, x, y, w, h):
+        """中央パネル: BOTTLENECK（黄白系・上下2段）"""
+        bg = pygame.Surface((w, h), pygame.SRCALPHA)
+        bg.fill((20, 18, 5, 220))
+        self.screen.blit(bg, (x, y))
+        pygame.draw.rect(self.screen, (200, 180, 50), (x, y, w, h), 1, border_radius=4)
+
+        title = self.font_s.render("BOTTLENECK  2bits / 5Hz", True, (220, 200, 80))
+        self.screen.blit(title, (x + 4, y + 3))
+
+        pulse  = bottleneck.get_current_pulse() if hasattr(bottleneck, 'get_current_pulse') else [0, 0]
+        hist   = bottleneck.get_pulse_history()  if hasattr(bottleneck, 'get_pulse_history')  else []
+        mode   = bottleneck.get_mode()            if hasattr(bottleneck, 'get_mode')            else 'listen'
+        prog   = bottleneck.get_turn_progress()   if hasattr(bottleneck, 'get_turn_progress')   else 0.0
+        phoneme = bottleneck.get_last_phoneme()   if hasattr(bottleneck, 'get_last_phoneme')    else ''
+
+        # 上段: S→M（傾聴ターン）
+        uy = y + 18
+        sm_c = (100, 160, 255) if mode == 'listen' else (60, 60, 80)
+        sm_lbl = self.font_s.render("S→M  ♀", True, sm_c)
+        self.screen.blit(sm_lbl, (x + 6, uy))
+        if mode == 'listen':
+            pygame.draw.rect(self.screen, (30, 30, 50), (x + 6, uy + 14, w - 12, 5))
+            pygame.draw.rect(self.screen, sm_c, (x + 6, uy + 14, int((w - 12) * prog), 5))
+            for i, bit in enumerate(pulse[:2]):
+                bx = x + 6 + i * 36
+                bc = C_PULSE_ON if bit else C_PULSE_OFF
+                pygame.draw.rect(self.screen, bc, (bx, uy + 22, 28, 28))
+                pygame.draw.rect(self.screen, C_GRAY, (bx, uy + 22, 28, 28), 1)
+                bt = self.font_m.render(str(bit), True, C_WHITE if bit else C_GRAY)
+                self.screen.blit(bt, (bx + 14 - bt.get_width() // 2, uy + 28))
+            if phoneme:
+                pt = self.font_m.render(f"「{phoneme}」", True, (255, 220, 100))
+                self.screen.blit(pt, (x + 90, uy + 22))
+
+        # 区切り線
+        mid_y = y + h // 2
+        pygame.draw.line(self.screen, (100, 90, 30), (x + 4, mid_y), (x + w - 4, mid_y), 1)
+
+        # 下段: M→S（発話ターン）
+        ly = mid_y + 6
+        ms_c = (100, 200, 120) if mode == 'speak' else (60, 80, 60)
+        ms_lbl = self.font_s.render("M→S  ♂", True, ms_c)
+        self.screen.blit(ms_lbl, (x + 6, ly))
+        if mode == 'speak':
+            pygame.draw.rect(self.screen, (30, 50, 30), (x + 6, ly + 14, w - 12, 5))
+            pygame.draw.rect(self.screen, ms_c, (x + 6, ly + 14, int((w - 12) * prog), 5))
+            for i, bit in enumerate(pulse[:2]):
+                bx = x + 6 + i * 36
+                bc = C_PULSE_ON if bit else C_PULSE_OFF
+                pygame.draw.rect(self.screen, bc, (bx, ly + 22, 28, 28))
+                pygame.draw.rect(self.screen, C_GRAY, (bx, ly + 22, 28, 28), 1)
+                bt = self.font_m.render(str(bit), True, C_WHITE if bit else C_GRAY)
+                self.screen.blit(bt, (bx + 14 - bt.get_width() // 2, ly + 28))
+            if phoneme:
+                pt = self.font_m.render(f"「{phoneme}」", True, (255, 220, 100))
+                self.screen.blit(pt, (x + 90, ly + 22))
+
+        # パルス履歴グリッド（下部）
+        hy = y + h - 28
+        for hi, hp in enumerate(hist[-16:]):
+            for bi, bit in enumerate(hp[:2]):
+                bx = x + 6 + hi * 16
+                by = hy + bi * 10
+                c = C_PULSE_ON if bit else C_PULSE_OFF
+                pygame.draw.rect(self.screen, c, (bx, by, 12, 8))
+
+    def _draw_motor_panel(self, genome, x, y, w, h):
+        """右パネル: MOTOR NN（赤系）"""
+        bg = pygame.Surface((w, h), pygame.SRCALPHA)
+        bg.fill((30, 5, 5, 220))
+        self.screen.blit(bg, (x, y))
+        pygame.draw.rect(self.screen, (200, 60, 60), (x, y, w, h), 1, border_radius=4)
+
+        title = self.font_s.render("MOTOR NN", True, (255, 100, 100))
+        self.screen.blit(title, (x + 6, y + 4))
+
+        gru_acts = getattr(genome, 'last_motor_gru',   [0.0] * 16)
+        out_acts = getattr(genome, 'last_output_act',  [0.5, 0.5, 0.0])
+        out_labels = ["Acc", "Str", "Brk"]
+
+        node_r  = 5
+        node_gap = 12
+        col_gru = x + 30
+        col_out = x + w - 60
+        row_top = y + 18
+
+        def _bipolar_color(v):
+            if v >= 0:
+                t = min(1.0, v)
+                return (int(40 + 215 * t), int(40 * (1-t)), 40)
+            else:
+                t = min(1.0, -v)
+                return (40, int(40 * (1-t)), int(40 + 215 * t))
+
+        # GRU列
+        n_gru = len(gru_acts)
+        sy_gru = row_top + max(0, (h - 28 - n_gru * node_gap) // 2)
+        for i, v in enumerate(gru_acts):
+            ny = sy_gru + i * node_gap
+            c = _bipolar_color(v)
+            pygame.draw.circle(self.screen, c, (col_gru, ny), node_r)
+            pygame.draw.circle(self.screen, (150, 50, 50), (col_gru, ny), node_r, 1)
+
+        # OUTPUT列（バー + 数値）
+        n_out = len(out_acts)
+        sy_out = row_top + max(0, (h - 28 - n_out * 36) // 2)
+        bar_w = w - col_out - x - 10
+        for i, (v, lbl) in enumerate(zip(out_acts, out_labels)):
+            oy = sy_out + i * 36
+            lt = self.font_s.render(lbl, True, (200, 100, 100))
+            self.screen.blit(lt, (col_out - lt.get_width() - 4, oy + 2))
+            # バー
+            pygame.draw.rect(self.screen, (50, 20, 20), (col_out, oy, bar_w, 14))
+            pygame.draw.rect(self.screen, (220, 80, 80), (col_out, oy, int(bar_w * max(0, min(1, v))), 14))
+            # 数値
+            vt = self.font_s.render(f"{v:.2f}", True, (200, 150, 150))
+            self.screen.blit(vt, (col_out, oy + 16))
+
+        # 凡例
+        leg = self.font_s.render("赤=+ 暗=0 青=-", True, (160, 80, 80))
+        self.screen.blit(leg, (x + 4, y + h - 14))
+
+        for lbl, lx, lc in [("GRU", col_gru, (200,80,80)), ("OUT", col_out + bar_w//2, (220,100,100))]:
+            lt = self.font_s.render(lbl, True, lc)
+            self.screen.blit(lt, (lx - lt.get_width() // 2, y + h - 14))
+
+    def _draw_flow_arrows(self, x, y, panel_w, panel_h, gap, mode):
+        """パネル間の接続矢印。"""
+        import time
+        flash = (int(time.time() * 5) % 2 == 0)   # 点滅
+
+        mid_y = y + panel_h // 2
+        ax1 = x + panel_w
+        ax2 = ax1 + gap
+        ax3 = ax2 + panel_w
+        ax4 = ax3 + gap
+
+        # 左矢印（S→M: 傾聴ターン中は青く点滅）
+        c1 = (100, 160, 255) if (mode == 'listen' and flash) else (50, 60, 80)
+        pygame.draw.line(self.screen, c1, (ax1, mid_y), (ax2, mid_y), 2)
+        pygame.draw.polygon(self.screen, c1, [
+            (ax2, mid_y), (ax2 - 5, mid_y - 4), (ax2 - 5, mid_y + 4)])
+
+        # 右矢印（M→S: 発話ターン中は赤く点滅）
+        c2 = (100, 200, 120) if (mode == 'speak' and flash) else (50, 80, 50)
+        pygame.draw.line(self.screen, c2, (ax3, mid_y), (ax4, mid_y), 2)
+        pygame.draw.polygon(self.screen, c2, [
+            (ax4, mid_y), (ax4 - 5, mid_y - 4), (ax4 - 5, mid_y + 4)])
+
+    # ================================================================
     def draw_overlay(self, text: str, color=C_WHITE):
         """画面中央にオーバーレイテキストを表示する。"""
         t = self.font_l.render(text, True, color)

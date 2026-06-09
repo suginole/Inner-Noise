@@ -661,28 +661,15 @@ class Game:
             display_genome = self.prev_best_genome
 
         if display_genome is not None:
-            label = "BEST ALIVE" if best_agent else f"PREV GEN {self.ga.generation-1} BEST"
-            lt = self.renderer.font_s.render(label, True, (180, 200, 100))
-            self.screen.blit(lt, (SCREEN_W - 510, SCREEN_H - 245))
-            self.renderer.draw_activation_panel(
-                display_genome,
-                x=SCREEN_W - 510, y=SCREEN_H - 230)
-
-        # ボトルネックパネル（アクティベーションモニターの左隣）
-        # audio_bnの実データを渡す（パルス・音素・音声ON/OFF）
-        bn = self.audio_bn
-        bn_pulse = bn.get_current_pulse()
-        bn_history = bn.get_pulse_history()
-        self.renderer.draw_bottleneck_dummy(
-            x=SCREEN_W - 510 - 270, y=SCREEN_H - 105,
-            pulse_state=bn_pulse,
-            history=bn_history,
-            mode=bn.get_mode(),
-            turn_progress=bn.get_turn_progress(),
-            phoneme=bn.get_last_phoneme(),
-            audio_on=bn.audio_enabled,
-            is_dummy=True,   # RNN実装後はFalseに変更
-        )
+            # 3パネルモニター（画面下部中央）
+            total_w = 280 * 3 + 8 * 2   # 3パネル + 間隔
+            mx = SCREEN_W // 2 - total_w // 2
+            my = SCREEN_H - 230
+            # 現在最優秀エージェントの RNNBottleneck を使用
+            bn_for_panel = best_agent.bn if best_agent and hasattr(best_agent, 'bn') else self.audio_bn
+            self.renderer.draw_rnn_monitor_panels(
+                display_genome, bn_for_panel,
+                x=mx, y=my, panel_w=280, panel_h=220)
 
         hint = self.renderer.font_s.render(
             "S: Save  V: Audio  Tab: Fast Mode  M: Menu  ESC: Quit", True, C_GRAY)

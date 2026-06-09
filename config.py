@@ -61,8 +61,23 @@ GOAL_RADIUS        = 60       # ゴール判定半径 (px)
 # ---- ボトルネック通信路 ----
 BN_PARAMS          = 2        # パラメータ数（2 bits = 母音のみ）
 BN_HZ              = 5        # パルス周波数
-BN_TURN_SEC        = 4        # 傾聴/発話ターン長 (秒)
+BN_TURN_SEC        = 4        # 傘聴/発話ターン長 (秒)
 BN_PULSES_PER_TURN = BN_HZ * BN_TURN_SEC   # = 20
+
+# ---- パイプライン型半双方向通信 ----
+TURN_FRAMES        = 240      # 4秒（60fps基準）
+PULSE_TOTAL        = 20       # 1ターンのパルス数
+PULSE_CONSUME_RATE = 24       # 半速消化（24フレームごとに1パルス消化）
+PIPELINE_OFFSET    = 120      # 半ターンずれ（10パルス分）
+
+# ---- RNNボトルネックアーキテクチャ ----
+SENSORY_INPUT_DIM  = 6 + VISION_RAYS + 1  # = 12（obsベクトル全次元）
+SENSORY_CORTEX_DIM = 16       # 感覚皮質FFの出力次元
+SENSORY_GRU_DIM    = 16       # 感覚 GRUの隠れ次元
+MOTOR_EMBED_DIM    = 16       # パルス埋め込みFFの出力次元
+MOTOR_GRU_DIM      = 16       # 運動 GRUの隠れ次元
+MOTOR_CORTEX_DIM   = 12       # 運動皮質FFの出力次元
+MOTOR_OUTPUT_DIM   = 3        # 出力FF（Accel/Steer/Brake）
 
 # ---- 報酬 ----
 REWARD_GOAL        = 1000.0
@@ -113,12 +128,12 @@ PHONEME_VOWEL = {
 }
 
 # 母音フォルマント周波数 (Hz)
-# 学術データ（Mokhtari & Tanaka 2000）に基づく実測平均値
+# 1オクターブ下げ実装（ピッチを人の耳に聴き取りやすい帯域に調整）
 PHONEME_FORMANTS = {
-    'a': (800,  1200),   # あ: F1高・F2中
-    'i': (300,  2300),   # い: F1低・F2高（最も識別しやすい）
-    'u': (400,  1550),   # う: F1低・F2中（旧値800Hzは誤り）
-    'o': (500,   800),   # お: F1中・F2低（うと区別するためF2を低く保つ）
+    'a': (400,   600),   # あ
+    'i': (150,  1150),   # い
+    'u': (150,   400),   # う
+    'o': (250,   400),   # お
 }
 
 # 2bits音素テーブル（表示用）
@@ -135,8 +150,8 @@ AUDIO_FRAME_MS      = 200     # ms（5Hzパルスに同期）
 AUDIO_FRAME_SAMPLES = int(AUDIO_SAMPLE_RATE * AUDIO_FRAME_MS / 1000)  # = 4410
 
 # S↔M方向別ピッチ係数
-PITCH_FACTOR_HIGH   = 1.4    # S→M（感覚→運動 / 傘聴ターン）: 高ピッチ
-PITCH_FACTOR_LOW    = 0.7    # M→S（運動→感覚 / 発話ターン）: 低ピッチ
+PITCH_FACTOR_HIGH   = 0.7    # S→M（感覚→運動 / 傘聴ターン）
+PITCH_FACTOR_LOW    = 0.35   # M→S（運動→感覚 / 発話ターン）
 
 # F1/F2ベース母音分類閾値
 # 学術データ（Mokhtari & Tanaka 2000、日本語母音コーパス）に基づく
