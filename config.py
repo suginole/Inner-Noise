@@ -60,15 +60,15 @@ GOAL_RADIUS        = 60       # ゴール判定半径 (px)
 
 # ---- ボトルネック通信路 ----
 BN_PARAMS          = 2        # パラメータ数（2 bits = 母音のみ）
-BN_HZ              = 5        # パルス周波数
-BN_TURN_SEC        = 4        # 傘聴/発話ターン長 (秒)
-BN_PULSES_PER_TURN = BN_HZ * BN_TURN_SEC   # = 20
+BN_HZ              = 2.5      # パルス周波数（2.5Hz）
+BN_TURN_SEC        = 8        # 傾聴/発話ターン長 (秒)
+BN_PULSES_PER_TURN = 20       # 1ターンのパルス数（20固定）
 
 # ---- パイプライン型半双方向通信 ----
-TURN_FRAMES        = 240      # 4秒（60fps基準）
+TURN_FRAMES        = 480      # 8秒（60fps基準）
 PULSE_TOTAL        = 20       # 1ターンのパルス数
-PULSE_CONSUME_RATE = 24       # 半速消化（24フレームごとに1パルス消化）
-PIPELINE_OFFSET    = 120      # 半ターンずれ（10パルス分）
+PULSE_CONSUME_RATE = 48       # 半速消化（48フレームごとに1パルス消化）
+PIPELINE_OFFSET    = 240      # 半ターンずれ（10パルス分）
 
 # ---- RNNボトルネックアーキテクチャ（バッファGRU挿入型・対称構造） ----
 SENSORY_INPUT_DIM  = 6 + VISION_RAYS + 1  # = 12（obsベクトル全次元）

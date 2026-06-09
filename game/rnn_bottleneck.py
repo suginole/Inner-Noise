@@ -439,8 +439,8 @@ class MotorNN:
 class RNNBottleneck:
     """パイプライン型半双方向通信ボトルネック。"""
 
-    PULSE_GEN_INTERVAL = TURN_FRAMES // PULSE_TOTAL   # = 12
-    DISPLAY_INTERVAL   = TURN_FRAMES // PULSE_TOTAL   # = 12（5Hz）
+    PULSE_GEN_INTERVAL = TURN_FRAMES // PULSE_TOTAL   # = 24
+    DISPLAY_INTERVAL   = TURN_FRAMES // PULSE_TOTAL   # = 24（2.5Hz）
 
     def __init__(self, sensory: SensoryNN, motor: MotorNN):
         self.sensory = sensory
