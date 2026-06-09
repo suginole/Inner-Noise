@@ -817,7 +817,7 @@ class Renderer:
 
     def _draw_sensory_panel(self, genome, x, y, w, h):
         """左パネル: SENSORY NN（青系）
-        4列: INPUT(12) / 感覚皮質FF(16) / 感覚GRU(16) / パルス符号化(2)
+        5列: INPUT(12) / 第三層FF(10) / バッファGRU(5) / 記憶GRU(12) / パルス符号化(2)
         """
         bg = pygame.Surface((w, h), pygame.SRCALPHA)
         bg.fill((5, 10, 30, 220))
@@ -827,11 +827,12 @@ class Renderer:
         title = self.font_s.render("SENSORY NN", True, (100, 160, 255))
         self.screen.blit(title, (x + 6, y + 4))
 
-        inp_acts    = getattr(genome, 'last_input_act',      [0.0] * 12)
-        cortex_acts = getattr(genome, 'last_cortex_act',     [0.0] * 16)  # 入力FF
-        gru_acts    = getattr(genome, 'last_sensory_gru',    [0.0] * 16)
-        integ_acts  = getattr(genome, 'last_sensory_integ',  [0.0] * 16)  # 統合FF
-        pulse_acts  = getattr(genome, 'last_pulse_act',      [0, 0])
+        inp_acts    = getattr(genome, 'last_input_act',        [0.0] * 12)
+        l3_acts     = getattr(genome, 'last_l3_act',           [0.0] * 10)  # 第三層FF(10)
+        buf_acts    = getattr(genome, 'last_sensory_buf',      [0.0] * 5)   # バッファGRU(5)
+        buf_active  = getattr(genome, 'last_sensory_buf_active', False)
+        gru_acts    = getattr(genome, 'last_sensory_gru',      [0.0] * 12)  # 記憶GRU(12)
+        pulse_acts  = getattr(genome, 'last_pulse_act',        [0, 0])
 
         inp_labels = ["E","Ga","Gx","Gy","Fx","Fy"] + \
                      [f"R{i}" for i in range(VISION_RAYS)] + ["Fc"]
@@ -840,11 +841,11 @@ class Renderer:
         node_gap = 12
         row_top  = y + 18
         # 5列の水平位置
-        col_inp    = x + 22
-        col_cortex = x + int(w * 0.28)
-        col_gru    = x + int(w * 0.47)
-        col_integ  = x + int(w * 0.66)
-        col_pulse  = x + w - 16
+        col_inp   = x + 18
+        col_l3    = x + int(w * 0.26)
+        col_buf   = x + int(w * 0.44)
+        col_gru   = x + int(w * 0.62)
+        col_pulse = x + w - 16
 
         def _bipolar_color(v):
             if v >= 0:
@@ -871,26 +872,51 @@ class Renderer:
                     self.screen.blit(lt, (cx - node_r - lt.get_width() - 2, ny - 5))
             return sy, n
 
-        sy_inp,    n_inp    = _draw_col(inp_acts,    col_inp,    bipolar=False, labels=inp_labels)
-        sy_cortex, n_cortex = _draw_col(cortex_acts, col_cortex, bipolar=True)
+        sy_inp, n_inp = _draw_col(inp_acts, col_inp, bipolar=False, labels=inp_labels)
 
-        # GRU列（継承領域と非継承領域を区切り線で分離）
+        # 第三層FF列（通常ノード[0:5]とバッファノード[5:10]を区切り線で分離）
+        n_l3 = len(l3_acts)
+        sy_l3 = row_top + max(0, (h - 28 - n_l3 * node_gap) // 2)
+        for i, v in enumerate(l3_acts):
+            ny = sy_l3 + i * node_gap
+            border = (80, 130, 220) if i < 5 else (60, 60, 120)  # 通常/バッファ
+            c = _bipolar_color(float(v))
+            pygame.draw.circle(self.screen, c, (col_l3, ny), node_r)
+            pygame.draw.circle(self.screen, border, (col_l3, ny), node_r, 1)
+        if n_l3 >= 5:
+            sep_y = sy_l3 + 5 * node_gap - node_gap // 2
+            pygame.draw.line(self.screen, (60, 80, 140),
+                             (col_l3 - 8, sep_y), (col_l3 + 8, sep_y), 1)
+
+        # バッファGRU列（紫系・受信フレームで明るく点滅）
+        buf_bright = buf_active
+        buf_base_c = (180, 80, 220) if buf_bright else (80, 30, 100)
+        n_buf = len(buf_acts)
+        sy_buf = row_top + max(0, (h - 28 - n_buf * node_gap) // 2)
+        for i, v in enumerate(buf_acts):
+            ny = sy_buf + i * node_gap
+            c = _bipolar_color(float(v))
+            # 受信フレームは明るい紫ボーダー、非受信は暗い紫（固定中）
+            pygame.draw.circle(self.screen, c, (col_buf, ny), node_r)
+            pygame.draw.circle(self.screen, buf_base_c, (col_buf, ny), node_r, 1)
+        # バッファ固定中インジケーター
+        if not buf_bright:
+            lock_t = self.font_s.render("■", True, (60, 20, 80))
+            self.screen.blit(lock_t, (col_buf - lock_t.get_width()//2, sy_buf - 12))
+
+        # 記憶GRU列（継承/非継承境界線）
         n_gru = len(gru_acts)
         sy_gru = row_top + max(0, (h - 28 - n_gru * node_gap) // 2)
         for i, v in enumerate(gru_acts):
             ny = sy_gru + i * node_gap
-            # 上位8次元（継承）は明るいボーダー、下位8（非継承）は暗いボーダー
-            border = (80, 120, 200) if i < 8 else (30, 50, 80)
+            border = (80, 120, 200) if i < GRU_INHERIT_DIM else (30, 50, 80)
             c = _bipolar_color(float(v))
             pygame.draw.circle(self.screen, c, (col_gru, ny), node_r)
             pygame.draw.circle(self.screen, border, (col_gru, ny), node_r, 1)
-        # 継承/非継承の境界線
-        if n_gru > 8:
-            sep_y = sy_gru + 8 * node_gap - node_gap // 2
+        if n_gru > GRU_INHERIT_DIM:
+            sep_y = sy_gru + GRU_INHERIT_DIM * node_gap - node_gap // 2
             pygame.draw.line(self.screen, (60, 80, 120),
                              (col_gru - 8, sep_y), (col_gru + 8, sep_y), 1)
-
-        sy_integ, n_integ = _draw_col(integ_acts,  col_integ, bipolar=True)
 
         # パルス符号化列（2ビット）
         n_pulse = len(pulse_acts)
@@ -903,21 +929,14 @@ class Renderer:
             bt = self.font_s.render(str(bit), True, C_WHITE if bit else C_GRAY)
             self.screen.blit(bt, (col_pulse - 9 + 8 - bt.get_width()//2, ny + 3))
 
-        # 層間エッジ（上位8本）
+        # 層間エッジ
         sensory_nn = getattr(genome, 'sensory', None)
         if sensory_nn is not None:
-            self._draw_edges(inp_acts,    sy_inp,    col_inp,    node_r,
-                             cortex_acts, sy_cortex, col_cortex, node_r,
-                             getattr(sensory_nn, 'W_input', None))
-            self._draw_edges(cortex_acts, sy_cortex, col_cortex, node_r,
-                             gru_acts,    sy_gru,    col_gru,    node_r,
-                             getattr(sensory_nn, 'Wh', None))
-            self._draw_edges(gru_acts,    sy_gru,    col_gru,    node_r,
-                             integ_acts,  sy_integ,  col_integ,  node_r,
-                             getattr(sensory_nn, 'W_integ', None))
-            # パルス符号化FF層へのエッジ（統合FF → 2bitパルス）
-            self._draw_edges(integ_acts,  sy_integ,  col_integ,  node_r,
-                             pulse_acts,  sy_pulse,  col_pulse,  node_r,
+            self._draw_edges(inp_acts,  sy_inp,  col_inp,  node_r,
+                             l3_acts,   sy_l3,   col_l3,   node_r,
+                             getattr(sensory_nn, 'W3', None))
+            self._draw_edges(gru_acts,  sy_gru,  col_gru,  node_r,
+                             pulse_acts, sy_pulse, col_pulse, node_r,
                              getattr(sensory_nn, 'W_encode', None),
                              node_gap_b=26)
 
@@ -925,11 +944,11 @@ class Renderer:
         leg = self.font_s.render("赤=+ 暗=0 青=-", True, (80, 100, 160))
         self.screen.blit(leg, (x + 4, y + h - 14))
         for lbl, lx, lc in [
-            ("IN",   col_inp,    (80, 120, 220)),
-            ("FF",   col_cortex, (90, 130, 220)),
-            ("GRU",  col_gru,    (100, 140, 220)),
-            ("INT",  col_integ,  (110, 150, 220)),
-            ("P",    col_pulse,  (200, 200, 80)),
+            ("IN",  col_inp,   (80, 120, 220)),
+            ("L3",  col_l3,    (90, 130, 220)),
+            ("BUF", col_buf,   (180, 80, 220)),
+            ("GRU", col_gru,   (100, 140, 220)),
+            ("P",   col_pulse, (200, 200, 80)),
         ]:
             lt = self.font_s.render(lbl, True, lc)
             self.screen.blit(lt, (lx - lt.get_width() // 2, y + h - 14))
@@ -1021,7 +1040,7 @@ class Renderer:
 
     def _draw_motor_panel(self, genome, x, y, w, h):
         """右パネル: MOTOR NN（赤系）
-        6列: 2bitバス(2) / 埋め辽FF(16) / 運動GRU(16) / 統合FF(16) / 運動皮質FF(12) / OUTPUT(3)
+        5列: 2bitバス(2) / 第三層FF(10) / バッファGRU(5) / 記憶GRU(12) / OUTPUT(3)
         """
         bg = pygame.Surface((w, h), pygame.SRCALPHA)
         bg.fill((30, 5, 5, 220))
@@ -1031,25 +1050,24 @@ class Renderer:
         title = self.font_s.render("MOTOR NN", True, (255, 100, 100))
         self.screen.blit(title, (x + 6, y + 4))
 
-        pulse_acts  = getattr(genome, 'last_pulse_act',        [0, 0])  # 2bitバス
-        embed_acts  = getattr(genome, 'last_embed_act',        [0.0] * 16)
-        gru_acts    = getattr(genome, 'last_motor_gru',        [0.0] * 16)
-        integ_acts  = getattr(genome, 'last_motor_integ',      [0.0] * 16)  # 統合FF
-        cortex_acts = getattr(genome, 'last_motor_cortex_act', [0.0] * 12)
+        pulse_acts  = getattr(genome, 'last_pulse_act',        [0, 0])       # 2bit入力
+        l3_acts     = getattr(genome, 'last_motor_l3_act',     [0.0] * 10)   # 第三層FF(10)
+        buf_acts    = getattr(genome, 'last_motor_buf',        [0.0] * 5)    # バッファGRU(5)
+        buf_active  = getattr(genome, 'last_motor_buf_active', False)
+        gru_acts    = getattr(genome, 'last_motor_gru',        [0.0] * 12)   # 記憶GRU(12)
         out_acts    = getattr(genome, 'last_output_act',       [0.5, 0.5, 0.0])
         out_labels  = ["Acc", "Str", "Brk"]
 
         node_r   = 3
         node_gap = 12
         row_top  = y + 18
-        # 6列の水平位置（2bitバス列を左端に追加）
-        col_bus    = x + 12           # 2bit入力バス
-        col_embed  = x + int(w * 0.22)
-        col_gru    = x + int(w * 0.38)
-        col_integ  = x + int(w * 0.54)
-        col_cortex = x + int(w * 0.70)
-        col_out    = x + int(w * 0.84)
-        bar_w      = w - (col_out - x) - 6
+        # 5列の水平位置
+        col_bus   = x + 12
+        col_l3    = x + int(w * 0.24)
+        col_buf   = x + int(w * 0.44)
+        col_gru   = x + int(w * 0.62)
+        col_out   = x + int(w * 0.82)
+        bar_w     = w - (col_out - x) - 6
 
         def _bipolar_color(v):
             if v >= 0:
@@ -1069,7 +1087,7 @@ class Renderer:
                 pygame.draw.circle(self.screen, border_c, (cx, ny), node_r, 1)
             return sy, n
 
-        # 2bitバス入力列を描画
+        # 2bit入力バス列
         n_pulse = len(pulse_acts)
         sy_pulse = row_top + max(0, (h - 28 - n_pulse * 26) // 2)
         for i, bit in enumerate(pulse_acts):
@@ -1080,24 +1098,47 @@ class Renderer:
             bt = self.font_s.render(str(bit), True, C_WHITE if bit else C_GRAY)
             self.screen.blit(bt, (col_bus - 9 + 8 - bt.get_width()//2, ny + 3))
 
-        sy_embed,  n_embed  = _draw_col(embed_acts,  col_embed)
+        # 第三層FF列（通常/バッファ区切り線）
+        n_l3 = len(l3_acts)
+        sy_l3 = row_top + max(0, (h - 28 - n_l3 * node_gap) // 2)
+        for i, v in enumerate(l3_acts):
+            ny = sy_l3 + i * node_gap
+            border = (220, 80, 80) if i < 5 else (100, 30, 30)
+            c = _bipolar_color(float(v))
+            pygame.draw.circle(self.screen, c, (col_l3, ny), node_r)
+            pygame.draw.circle(self.screen, border, (col_l3, ny), node_r, 1)
+        if n_l3 >= 5:
+            sep_y = sy_l3 + 5 * node_gap - node_gap // 2
+            pygame.draw.line(self.screen, (120, 40, 40),
+                             (col_l3 - 8, sep_y), (col_l3 + 8, sep_y), 1)
 
-        # GRU列（継承/非継承境界線）
+        # バッファGRU列（紫系・受信フレームで明るく）
+        buf_bright = buf_active
+        buf_base_c = (180, 80, 220) if buf_bright else (80, 30, 100)
+        n_buf = len(buf_acts)
+        sy_buf = row_top + max(0, (h - 28 - n_buf * node_gap) // 2)
+        for i, v in enumerate(buf_acts):
+            ny = sy_buf + i * node_gap
+            c = _bipolar_color(float(v))
+            pygame.draw.circle(self.screen, c, (col_buf, ny), node_r)
+            pygame.draw.circle(self.screen, buf_base_c, (col_buf, ny), node_r, 1)
+        if not buf_bright:
+            lock_t = self.font_s.render("■", True, (60, 20, 80))
+            self.screen.blit(lock_t, (col_buf - lock_t.get_width()//2, sy_buf - 12))
+
+        # 記憶GRU列（継承/非継承境界線）
         n_gru = len(gru_acts)
         sy_gru = row_top + max(0, (h - 28 - n_gru * node_gap) // 2)
         for i, v in enumerate(gru_acts):
             ny = sy_gru + i * node_gap
-            border = (200, 80, 80) if i < 8 else (60, 20, 20)
+            border = (200, 80, 80) if i < GRU_INHERIT_DIM else (60, 20, 20)
             c = _bipolar_color(float(v))
             pygame.draw.circle(self.screen, c, (col_gru, ny), node_r)
             pygame.draw.circle(self.screen, border, (col_gru, ny), node_r, 1)
-        if n_gru > 8:
-            sep_y = sy_gru + 8 * node_gap - node_gap // 2
+        if n_gru > GRU_INHERIT_DIM:
+            sep_y = sy_gru + GRU_INHERIT_DIM * node_gap - node_gap // 2
             pygame.draw.line(self.screen, (100, 40, 40),
                              (col_gru - 8, sep_y), (col_gru + 8, sep_y), 1)
-
-        sy_integ,  n_integ  = _draw_col(integ_acts,  col_integ)
-        sy_cortex, n_cortex = _draw_col(cortex_acts, col_cortex)
 
         # OUTPUT列（バー + 数値）
         n_out = len(out_acts)
@@ -1112,25 +1153,15 @@ class Renderer:
             vt = self.font_s.render(f"{v:.2f}", True, (200, 150, 150))
             self.screen.blit(vt, (col_out, oy + 16))
 
-        # 層間エッジ（上位8本）
+        # 層間エッジ
         motor_nn = getattr(genome, 'motor', None)
         if motor_nn is not None:
-            # 2bitバス → 埋め辽FFへのエッジ
-            self._draw_edges(pulse_acts,  sy_pulse,  col_bus,    node_r,
-                             embed_acts,  sy_embed,  col_embed,  node_r,
-                             getattr(motor_nn, 'W_embed', None),
+            self._draw_edges(pulse_acts, sy_pulse, col_bus,  node_r,
+                             l3_acts,   sy_l3,    col_l3,   node_r,
+                             getattr(motor_nn, 'W3', None),
                              node_gap_a=26)
-            self._draw_edges(embed_acts,  sy_embed,  col_embed,  node_r,
-                             gru_acts,    sy_gru,    col_gru,    node_r,
-                             getattr(motor_nn, 'Wh', None))
-            self._draw_edges(gru_acts,    sy_gru,    col_gru,    node_r,
-                             integ_acts,  sy_integ,  col_integ,  node_r,
-                             getattr(motor_nn, 'W_integ', None))
-            self._draw_edges(integ_acts,  sy_integ,  col_integ,  node_r,
-                             cortex_acts, sy_cortex, col_cortex, node_r,
-                             getattr(motor_nn, 'W_cortex', None))
-            self._draw_edges(cortex_acts, sy_cortex, col_cortex, node_r,
-                             out_acts,    sy_out,    col_out,    node_r,
+            self._draw_edges(gru_acts,  sy_gru,   col_gru,  node_r,
+                             out_acts,  sy_out,   col_out,  node_r,
                              getattr(motor_nn, 'W_out', None),
                              node_gap_b=36)
 
@@ -1138,12 +1169,11 @@ class Renderer:
         leg = self.font_s.render("赤=+ 暗=0 青=-", True, (160, 80, 80))
         self.screen.blit(leg, (x + 4, y + h - 14))
         for lbl, lx, lc in [
-            ("BUS",  col_bus,    (200, 160, 60)),
-            ("EMB",  col_embed,  (200, 80, 80)),
-            ("GRU",  col_gru,    (210, 90, 90)),
-            ("INT",  col_integ,  (215, 95, 95)),
-            ("FF",   col_cortex, (220, 100, 100)),
-            ("OUT",  col_out + bar_w // 2, (240, 120, 120)),
+            ("BUS", col_bus,  (200, 160, 60)),
+            ("L3",  col_l3,   (200, 80, 80)),
+            ("BUF", col_buf,  (180, 80, 220)),
+            ("GRU", col_gru,  (210, 90, 90)),
+            ("OUT", col_out + bar_w // 2, (240, 120, 120)),
         ]:
             lt = self.font_s.render(lbl, True, lc)
             self.screen.blit(lt, (lx - lt.get_width() // 2, y + h - 14))
