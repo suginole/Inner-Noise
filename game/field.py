@@ -187,11 +187,34 @@ class Field:
                 placed += 1
 
     def reset_foods(self, food_episode: int | None = None):
-        """餌をリセットして再配置する（エピソード開始時に呼ぶ）。"""
+        """餅をリセットして再配置する（エピソード開始時に呼ぶ）。"""
         if food_episode is not None:
             self.food_episode = food_episode
         self._food_rng = random.Random(FOOD_SEED + self.food_episode)
         self._place_foods()
+
+    def clone_foods(self) -> 'Field':
+        """現在の餅配置をコピーした独立なFieldインスタンスを返す。
+
+        GA評価時に各エージェントに渡すことで、
+        他のエージェントの餅取得に影響されず独立した取得状況を保証する。
+        地形（hmap）・スタート・ゴール・峰座標は共有（変更なし）。
+        餅リストのみディープコピーする。
+        """
+        import copy
+        clone = Field.__new__(Field)
+        # 地形・座標は元インスタンスと共有（読み取り専用なので安全）
+        clone.terrain_seed = self.terrain_seed
+        clone.food_episode = self.food_episode
+        clone.hmap         = self.hmap          # numpy配列は共有（変更なし）
+        clone.pass_pos     = self.pass_pos
+        clone.start_pos    = self.start_pos
+        clone.goal_pos     = self.goal_pos
+        # 餅リストはディープコピー（各エージェントが独立に取得・削除できる）
+        clone.foods = [(pygame.Vector2(pos), is_p) for pos, is_p in self.foods]
+        # 餅補充用RNGは同じシードから再生成（補充順序が元と同じになる）
+        clone._food_rng = random.Random(FOOD_SEED + self.food_episode)
+        return clone
 
     # ----------------------------------------------------------------
     def height_at(self, wx: float, wy: float) -> float:

@@ -125,7 +125,11 @@ class Game:
         self.ga_agents = []
         for genome in self.ga.population:
             car = Car(*self.field.start_pos)
-            agent = GAAgent(car, self.field, genome)
+            # 各エージェントに独立した餅セットを渡す。
+            # clone_foods()は餅リストのみコピーし、地形・座標は共有するので軽量。
+            # これにより他エージェントの餅取得に影響されず公平な評価が可能になる。
+            agent_field = self.field.clone_foods()
+            agent = GAAgent(car, agent_field, genome)
             # 音声が有効なら全エージェントのbnにコンバーターを属成
             if self.audio_bn.audio_enabled and hasattr(agent, 'bn'):
                 agent.bn.audio_enabled = True
