@@ -20,7 +20,7 @@ bottleneck.py — ボトルネック通信路
   get_pulse_history() -> list[list[int]]
       直近20パルスの履歴（HUD表示用）
 """
-from config import BN_HZ, BN_TURN_SEC, BN_PARAMS, BN_PULSES_PER_TURN, FPS, VISION_RAYS
+from config import BN_HZ, BN_TURN_SEC, BN_PARAMS, BN_PULSES_PER_TURN, FPS, VISION_RAYS, PHONEME_TABLE
 import math
 
 
@@ -47,7 +47,7 @@ class Bottleneck:
         self._last_obs: list[float] = [0.5] + [0.0] * (obs_dim - 1)
         self._last_action: list[float] = [0.0, 0.5, 0.0]
         self._pulse_history: list[list[int]] = []
-        self._current_pulse: list[int] = [0, 0, 0, 0]
+        self._current_pulse: list[int] = [0, 0]   # 2bits
 
         # ---- 音声変換フック ----
         # audio_enabled=Trueにするとパルス発火時にPhonemeConverter.play()を呼ぶ
@@ -88,9 +88,9 @@ class Bottleneck:
                 self._pulse_history.pop(0)
             self._current_pulse = pulse
 
-            # 音声変換フック
-            bits4 = (pulse[0] << 3) | (pulse[1] << 2) | (pulse[2] << 1) | pulse[3]
-            self.on_pulse_emit(bits4)
+            # 音声変換フック（2bits）
+            bits2 = (pulse[0] << 1) | pulse[1]
+            self.on_pulse_emit(bits2)
 
             # 発話ターンのパルスから行動を更新
             if self._mode == "speak":
@@ -101,7 +101,8 @@ class Bottleneck:
     # ----------------------------------------------------------------
     def _fire_pulse(self) -> list[int]:
         """
-        観測ベクトルを4 bitsパルスに変換する（スタブ：線形閾値）。
+        観測ベクトルを2bitsパルスに変換する（スタブ：線形閾値）。
+        2bits = 母音のみ（子音なし）
         将来: 感覚の海馬LSTM → Attention → 量子化 に差し替え。
         """
         obs = self._last_obs
@@ -109,30 +110,18 @@ class Bottleneck:
         # [energy, goal_angle, grad_x, grad_y, food_dx, food_dy]
         p0 = 1 if obs[0] < 0.4 else 0          # エネルギー低下警告
         p1 = 1 if obs[1] > 0.3 else 0           # ゴール右方向
-        p2 = 1 if obs[4] > 0.2 else 0           # 餌が右方向
-        p3 = 1 if (obs[2]**2 + obs[3]**2) > 0.1 else 0  # 急勾配
-        return [p0, p1, p2, p3]
+        return [p0, p1]   # 2bits
 
     # ----------------------------------------------------------------
     def _decode_action(self, pulse: list[int]) -> list[float]:
         """
-        4 bitsパルスを行動 [accel, steer, brake] に変換する（スタブ）。
+        2bitsパルスを行動 [accel, steer, brake] に変換する（スタブ）。
         将来: 運動の海馬LSTM → 補間層 に差し替え。
         """
-        if self.weights is not None:
-            import numpy as np
-            # 線形写像: weights (3,4) @ pulse (4,) → action (3,)
-            w = self.weights
-            raw = w @ pulse
-            # sigmoid で 0〜1 に変換
-            action = [1.0 / (1.0 + math.exp(-x)) for x in raw]
-            return action
-
-        # デフォルトスタブ：パルスパターンを単純マッピング
         p = pulse
         accel = 0.6 if p[0] == 0 else 0.3   # エネルギー低いと減速
-        steer = 0.5 + (p[1] - p[2]) * 0.25  # ゴール方向 vs 餌方向
-        brake = 0.3 if p[3] == 1 else 0.0   # 急勾配でブレーキ
+        steer = 0.5 + (p[1] - 0.5) * 0.5    # ゴール方向
+        brake = 0.0
         return [
             max(0.0, min(1.0, accel)),
             max(0.0, min(1.0, steer)),
@@ -143,25 +132,23 @@ class Bottleneck:
     # ----------------------------------------------------------------
     # 音声変換フック（将来のRNN実装後も差し替え不要）
     # ----------------------------------------------------------------
-    def on_pulse_emit(self, bits4: int) -> None:
-        """パルス送信時に呼ばれるフック。
+    def on_pulse_emit(self, bits2: int) -> None:
+        """パルス送信時に呼ばれるフック（2bits）。
         audio_enabled=Trueの場合は PhonemeConverter.play() を呼び出す。
         """
         if self.audio_enabled and self.converter is not None:
             try:
-                self._last_phoneme = self.converter.pulse_to_phoneme(bits4)
-                self.converter.play(bits4)
+                self._last_phoneme = self.converter.pulse_to_phoneme(bits2)
+                self.converter.play(bits2)
             except Exception:
                 pass
         else:
-            # 音声無効時も音素文字だけ更新
-            from config import PHONEME_TABLE
-            self._last_phoneme = PHONEME_TABLE.get(bits4 & 0xF, "")
+            self._last_phoneme = PHONEME_TABLE.get(bits2 & 0x3, "")
 
     def on_pulse_receive(self, frame) -> int:
         """マイク入力時に呼ばれるフック。
         audio_enabled=Trueの場合は PhonemeDecoder.decode() を呼び出す。
-        Returns: 復元された 4bits整数
+        Returns: 復元された 2bits整数
         """
         if self.audio_enabled and self.decoder is not None:
             try:
@@ -226,4 +213,4 @@ class Bottleneck:
         self._last_obs     = [0.5] + [0.0] * (6 + VISION_RAYS - 1)
         self._last_action  = [0.0, 0.5, 0.0]
         self._pulse_history.clear()
-        self._current_pulse = [0, 0, 0, 0]
+        self._current_pulse = [0, 0]   # 2bits

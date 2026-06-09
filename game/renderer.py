@@ -364,16 +364,16 @@ class Renderer:
         if pulse_state is None:
             # ダミー: 時刻に基づいたランダム点滅
             import time
-            t_seed = int(time.time() * 5) % 16   # 5Hz相当
-            pulse_state = [(t_seed >> i) & 1 for i in range(4)]
+            t_seed = int(time.time() * 5) % 4   # 5Hz相当、2bits
+            pulse_state = [(t_seed >> i) & 1 for i in range(2)]
 
         if history is None:
             # ダミー履歴
             import time
             history = []
             for k in range(16):
-                ts = int(time.time() * 5 - k) % 16
-                history.append([(ts >> i) & 1 for i in range(4)])
+                ts = int(time.time() * 5 - k) % 4
+                history.append([(ts >> i) & 1 for i in range(2)])
 
         # モード表示
         mode_color = (100, 160, 220) if mode == "listen" else (100, 200, 120)
@@ -387,23 +387,23 @@ class Renderer:
         pygame.draw.rect(self.screen, mode_color,
                          (x + 4, y + 30, int((W - 8) * turn_progress), 5))
 
-        # 現在パルス 4 bits
-        for i, bit in enumerate(pulse_state[:4]):
-            bx = x + 4 + i * 26
+        # 現在パルス 2 bits
+        for i, bit in enumerate(pulse_state[:2]):
+            bx = x + 4 + i * 40   # 2マスなので間隔を広く
             by = y + 40
-            c = C_PULSE_ON if bit else C_PULSE_OFF
-            pygame.draw.rect(self.screen, c, (bx, by, 20, 20))
-            pygame.draw.rect(self.screen, C_GRAY, (bx, by, 20, 20), 1)
+            col = C_PULSE_ON if bit else C_PULSE_OFF
+            pygame.draw.rect(self.screen, col, (bx, by, 32, 32))
+            pygame.draw.rect(self.screen, C_GRAY, (bx, by, 32, 32), 1)
             lt = self.font_s.render(str(bit), True, C_WHITE if bit else C_GRAY)
-            self.screen.blit(lt, (bx + 10 - lt.get_width() // 2, by + 4))
+            self.screen.blit(lt, (bx + 16 - lt.get_width() // 2, by + 8))
 
         # 履歴（小さく）
         for hi, hp in enumerate(history[-16:]):
-            for bi, bit in enumerate(hp[:4]):
+            for bi, bit in enumerate(hp[:2]):
                 bx = x + 115 + hi * 9
-                by = y + 40 + bi * 9
-                c = C_PULSE_ON if bit else C_PULSE_OFF
-                pygame.draw.rect(self.screen, c, (bx, by, 7, 7))
+                by = y + 40 + bi * 12
+                col2 = C_PULSE_ON if bit else C_PULSE_OFF
+                pygame.draw.rect(self.screen, col2, (bx, by, 7, 7))
 
         # 音素表示
         if phoneme:
@@ -571,7 +571,7 @@ class Renderer:
               }
         """
         import numpy as np
-        from config import PHONEME_TABLE, PHONEME_FORMANTS, PHONEME_CONSONANT, PHONEME_VOWEL
+        from config import PHONEME_TABLE, PHONEME_FORMANTS, PHONEME_VOWEL
 
         self.screen.fill((0, 0, 0))   # 黒背景
 
@@ -624,7 +624,7 @@ class Renderer:
         """OUTPUT DEBUGパネル。"""
         import numpy as np
         from config import (
-            PHONEME_TABLE, PHONEME_FORMANTS, PHONEME_CONSONANT, PHONEME_VOWEL,
+            PHONEME_TABLE, PHONEME_FORMANTS, PHONEME_VOWEL,
             AUDIO_FRAME_SAMPLES,
         )
 
@@ -637,34 +637,31 @@ class Renderer:
         title = self.font_m.render("OUTPUT DEBUG", True, (255, 120, 180))
         self.screen.blit(title, (x + 8, y + 8))
 
-        # bits4 をビット列に分解
-        bits_list = [(bits4 >> (3 - i)) & 1 for i in range(4)]
-        consonant_bits = (bits4 >> 2) & 0x3
-        vowel_bits     = bits4 & 0x3
-        phoneme_char   = PHONEME_TABLE.get(bits4, "?")
-        vowel_char     = PHONEME_VOWEL.get(vowel_bits, "?")
-        consonant_char = PHONEME_CONSONANT.get(consonant_bits)
-        f1, f2         = PHONEME_FORMANTS.get(vowel_char, (0, 0))
+        # bits2 をビット列に分解
+        bits2     = bits4 & 0x3   # 下位2bitsのみ使用
+        bits_list = [(bits2 >> (1 - i)) & 1 for i in range(2)]
+        vowel_char   = PHONEME_VOWEL.get(bits2, "?")
+        phoneme_char = PHONEME_TABLE.get(bits2, "?")
+        f1, f2       = PHONEME_FORMANTS.get(vowel_char, (0, 0))
 
-        # パルスビット表示
+        # パルスビット表示（2マス）
         bx0 = x + 8
         by0 = y + 32
         for i, bit in enumerate(bits_list):
-            bx = bx0 + i * 36
-            c = C_PULSE_ON if bit else C_PULSE_OFF
-            pygame.draw.rect(self.screen, c, (bx, by0, 28, 28))
-            pygame.draw.rect(self.screen, C_GRAY, (bx, by0, 28, 28), 1)
+            bx = bx0 + i * 50   # 2マスなので間隔を広く
+            col = C_PULSE_ON if bit else C_PULSE_OFF
+            pygame.draw.rect(self.screen, col, (bx, by0, 40, 40))
+            pygame.draw.rect(self.screen, C_GRAY, (bx, by0, 40, 40), 1)
             bt = self.font_m.render(str(bit), True, C_WHITE if bit else C_GRAY)
-            self.screen.blit(bt, (bx + 14 - bt.get_width() // 2, by0 + 5))
+            self.screen.blit(bt, (bx + 20 - bt.get_width() // 2, by0 + 10))
 
-        # 音素情報
-        ry = by0 + 40
+        # 音素情報（子音なし）
+        ry = by0 + 52
         rows = [
-            ("Phoneme",   f"「{phoneme_char}」"),
-            ("F1",        f"{f1} Hz"),
-            ("F2",        f"{f2} Hz"),
-            ("Consonant", str(consonant_char) if consonant_char else "(none)"),
-            ("Vowel",     vowel_char),
+            ("Phoneme", f"「{phoneme_char}」"),
+            ("F1",      f"{f1} Hz"),
+            ("F2",      f"{f2} Hz"),
+            ("Vowel",   vowel_char),
         ]
         for label, val in rows:
             lt = self.font_s.render(f"{label}:", True, C_GRAY)
@@ -728,7 +725,7 @@ class Renderer:
         decoded_bits = mic_data.get("decoded_bits", 0)
         expected_char = PHONEME_TABLE.get(expected_bits4, "?")
         decoded_char  = PHONEME_TABLE.get(decoded_bits, "?")
-        match = (decoded_bits == expected_bits4)
+        match = ((decoded_bits & 0x3) == (expected_bits4 & 0x3))
 
         rows = [
             ("Detected F1", f"{mic_data.get('f1', 0):.0f} Hz"),
@@ -744,35 +741,37 @@ class Renderer:
             ry += 26
 
         ry += 8
-        # Decoded bits
-        bits_list = [(decoded_bits >> (3 - i)) & 1 for i in range(4)]
+        # Decoded bits (2bits)
+        decoded_bits2 = decoded_bits & 0x3
+        bits_list = [(decoded_bits2 >> (1 - i)) & 1 for i in range(2)]
         dt = self.font_s.render("Decoded:", True, C_GRAY)
         self.screen.blit(dt, (x + 8, ry))
         for i, bit in enumerate(bits_list):
-            bx = x + 100 + i * 32
-            c = C_PULSE_ON if bit else C_PULSE_OFF
-            pygame.draw.rect(self.screen, c, (bx, ry - 2, 24, 24))
-            pygame.draw.rect(self.screen, C_GRAY, (bx, ry - 2, 24, 24), 1)
+            bx = x + 100 + i * 40
+            col = C_PULSE_ON if bit else C_PULSE_OFF
+            pygame.draw.rect(self.screen, col, (bx, ry - 2, 30, 30))
+            pygame.draw.rect(self.screen, C_GRAY, (bx, ry - 2, 30, 30), 1)
             bt = self.font_s.render(str(bit), True, C_WHITE if bit else C_GRAY)
-            self.screen.blit(bt, (bx + 12 - bt.get_width() // 2, ry + 3))
+            self.screen.blit(bt, (bx + 15 - bt.get_width() // 2, ry + 6))
         dc = self.font_m.render(f"「{decoded_char}」", True, C_WHITE)
-        self.screen.blit(dc, (x + 240, ry - 2))
-        ry += 34
+        self.screen.blit(dc, (x + 200, ry - 2))
+        ry += 40
 
-        # Expected bits
-        exp_bits_list = [(expected_bits4 >> (3 - i)) & 1 for i in range(4)]
+        # Expected bits (2bits)
+        exp_bits2 = expected_bits4 & 0x3
+        exp_bits_list = [(exp_bits2 >> (1 - i)) & 1 for i in range(2)]
         et = self.font_s.render("Expected:", True, C_GRAY)
         self.screen.blit(et, (x + 8, ry))
         for i, bit in enumerate(exp_bits_list):
-            bx = x + 100 + i * 32
-            c = (80, 120, 200) if bit else C_PULSE_OFF
-            pygame.draw.rect(self.screen, c, (bx, ry - 2, 24, 24))
-            pygame.draw.rect(self.screen, C_GRAY, (bx, ry - 2, 24, 24), 1)
+            bx = x + 100 + i * 40
+            col = (80, 120, 200) if bit else C_PULSE_OFF
+            pygame.draw.rect(self.screen, col, (bx, ry - 2, 30, 30))
+            pygame.draw.rect(self.screen, C_GRAY, (bx, ry - 2, 30, 30), 1)
             bt = self.font_s.render(str(bit), True, C_WHITE if bit else C_GRAY)
-            self.screen.blit(bt, (bx + 12 - bt.get_width() // 2, ry + 3))
+            self.screen.blit(bt, (bx + 15 - bt.get_width() // 2, ry + 6))
         ec = self.font_m.render(f"「{expected_char}」", True, (180, 180, 220))
-        self.screen.blit(ec, (x + 240, ry - 2))
-        ry += 34
+        self.screen.blit(ec, (x + 200, ry - 2))
+        ry += 40
 
         # Match
         match_c = (80, 220, 100) if match else (220, 80, 80)

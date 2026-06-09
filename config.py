@@ -59,7 +59,7 @@ PASS_REWARD_COUNT  = 8        # 峰出口片側に配置する超高級餌の数
 GOAL_RADIUS        = 60       # ゴール判定半径 (px)
 
 # ---- ボトルネック通信路 ----
-BN_PARAMS          = 4        # パラメータ数（4 bits）
+BN_PARAMS          = 2        # パラメータ数（2 bits = 母音のみ）
 BN_HZ              = 5        # パルス周波数
 BN_TURN_SEC        = 4        # 傾聴/発話ターン長 (秒)
 BN_PULSES_PER_TURN = BN_HZ * BN_TURN_SEC   # = 20
@@ -102,15 +102,8 @@ C_WHITE        = (255, 255, 255)
 C_GRAY         = (120, 120, 120)
 C_DARK         = (30,   30,  40)
 
-# ---- 音素テーブル（4bits = 上位2bits調音 × 下位2bits母音） ----
-# 将来の音素追加・変更はここを編集するだけでよい
-
-PHONEME_CONSONANT = {
-    0b00: None,  # クリーン（子音なし）
-    0b01: 's',   # 無声摩擦音
-    0b10: 'n',   # 鼻音（歯茎）
-    0b11: 'm',   # 鼻音（両唇）
-}
+# ---- 音素テーブル（2bits = 母音のみ） ----
+# 子音は使用しない。将来の変更はここを編集するだけでよい。
 
 PHONEME_VOWEL = {
     0b00: 'u',   # う（F1低・F2低）
@@ -127,22 +120,23 @@ PHONEME_FORMANTS = {
     'o': (500,   800),
 }
 
-# 全16音素テーブル（表示用）
+# 2bits音素テーブル（表示用）
 PHONEME_TABLE = {
-    0b0000: 'う', 0b0001: 'い', 0b0010: 'お', 0b0011: 'あ',
-    0b0100: 'す', 0b0101: 'し', 0b0110: 'そ', 0b0111: 'さ',
-    0b1000: 'ぬ', 0b1001: 'に', 0b1010: 'の', 0b1011: 'な',
-    0b1100: 'む', 0b1101: 'み', 0b1110: 'も', 0b1111: 'ま',
+    0b00: 'う',
+    0b01: 'い',
+    0b10: 'お',
+    0b11: 'あ',
 }
 
 # 音声合成パラメータ
-AUDIO_SAMPLE_RATE  = 22050   # Hz
-AUDIO_FRAME_MS     = 200     # ms（5Hzパルスに同期）
+AUDIO_SAMPLE_RATE   = 22050   # Hz
+AUDIO_FRAME_MS      = 200     # ms（5Hzパルスに同期）
 AUDIO_FRAME_SAMPLES = int(AUDIO_SAMPLE_RATE * AUDIO_FRAME_MS / 1000)  # = 4410
 
-# 調音パラメータ
-AUDIO_SIBILANT_FREQ   = 1500   # s: このHz以上のノイズを付加
-AUDIO_SIBILANT_MS     = 20     # s: ノイズ付加区間（ms）
-AUDIO_NASAL_FREQ      = 275    # n/m: 鼻腔共鳴周波数（Hz）
-AUDIO_NASAL_GAIN      = 0.3    # n/m: 鼻腔共鳴の振幅比
-AUDIO_BILABIAL_MS     = 10     # m: 冒頭無音区間（ms）
+# F1/F2比率ベース母音分類閾値
+# 判定ツリー: F2/F1 > VOWEL_F2F1_I → い
+#              F1 > VOWEL_F1_A      → あ
+#              F2 < VOWEL_F2_U      → う（残りはお）
+VOWEL_F2F1_I        = 4.5     # い の判定閾値（F2/F1比）
+VOWEL_F1_A          = 600     # あ の判定閾値（F1 Hz）
+VOWEL_F2_U          = 900     # う の判定閾値（F2 Hz）

@@ -1,20 +1,28 @@
 """
-phoneme.py — 4bitsパルス ↔ 音素変換モジュール
+phoneme.py — 2bitsパルス ↔ 母音変換モジュール（2bits統一版）
 
-PhonemeConverter : 4bits → 音声合成 → pygame.mixer 出力
-PhonemeDecoder   : マイク入力 → FFT → 4bits 復元
+2bits = 母音のみ（子音なし）
+  00 = う  (F1低・F2低)
+  01 = い  (F1低・F2高)  ← F2/F1比が最大で最も識別しやすい
+  10 = お  (F1中・F2低)
+  11 = あ  (F1高・F2中)  ← F1が最大で識別しやすい
 
-このモジュールは NN・GA・フィールドに一切依存しない独立モジュール。
-RNNボトルネック実装後も差し替え不要。
-リアル物理通信（スピーカー→マイク）への拡張を想定したバッファ設計。
+PhonemeConverter : 2bits → フォルマント合成 → pygame.mixer 出力
+PhonemeDecoder   : マイク入力 → F1/F2比率判定 → 2bits 復元
+
+検知方法（比率ベース、音量・話者依存なし）:
+  F2/F1 > 4.5  → い (01)
+  F1 > 600Hz   → あ (11)
+  F2 < 900Hz   → う (00)
+  else         → お (10)
+
+5Hz同期読み取り:
+  record_frame_sync() で200ms区間を1回だけ録音・判定する。
+  呼び出し側がパルスタイミングに合わせて呼ぶこと。
 """
 from __future__ import annotations
 import numpy as np
-import threading
-import queue
-import time
 
-# pygame.mixer は遅延インポート（ヘッドレス環境対応）
 _mixer_ready = False
 
 try:
@@ -38,15 +46,13 @@ except ImportError:
     _scipy_available = False
 
 from config import (
-    PHONEME_CONSONANT, PHONEME_VOWEL, PHONEME_FORMANTS, PHONEME_TABLE,
+    PHONEME_VOWEL, PHONEME_FORMANTS, PHONEME_TABLE,
     AUDIO_SAMPLE_RATE, AUDIO_FRAME_MS, AUDIO_FRAME_SAMPLES,
-    AUDIO_SIBILANT_FREQ, AUDIO_SIBILANT_MS,
-    AUDIO_NASAL_FREQ, AUDIO_NASAL_GAIN, AUDIO_BILABIAL_MS,
+    VOWEL_F2F1_I, VOWEL_F1_A, VOWEL_F2_U,
 )
 
 
 def _ensure_mixer():
-    """pygame.mixer を初期化する（一度だけ）。"""
     global _mixer_ready
     if _mixer_ready or not _pygame_available:
         return
@@ -66,18 +72,16 @@ def _ensure_mixer():
 # ================================================================
 class PhonemeConverter:
     """
-    4bitsパルス → フォルマント合成 → pygame.mixer 出力。
+    2bitsパルス → フォルマント合成 → pygame.mixer 出力。
 
     合成ロジック:
-      - 母音: F1・F2 のサイン波を重ね合わせ
-      - s   : 冒頭 AUDIO_SIBILANT_MS ms に 1500Hz 以上のホワイトノイズを付加
-      - n   : 鼻腔共鳴（AUDIO_NASAL_FREQ Hz）を加算
-      - m   : n と同様 + 冒頭 AUDIO_BILABIAL_MS ms を無音（両唇閉鎖）
+      - F1・F2 のサイン波を重ね合わせ（母音のみ）
+      - フェードイン/アウトでクリックノイズを防止
     """
 
     def __init__(self):
         _ensure_mixer()
-        self._channel: "pygame.mixer.Channel | None" = None
+        self._channel = None
         if _pygame_available and _mixer_ready:
             try:
                 self._channel = pygame.mixer.Channel(0)
@@ -85,59 +89,36 @@ class PhonemeConverter:
                 pass
 
     # ----------------------------------------------------------------
-    def pulse_to_phoneme(self, bits4: int) -> str:
-        """4bits → 音素文字列（例: 'ま'）を返す。"""
-        return PHONEME_TABLE.get(bits4 & 0xF, '？')
+    def pulse_to_phoneme(self, bits2: int) -> str:
+        """2bits → 音素文字列（例: 'あ'）を返す。"""
+        return PHONEME_TABLE.get(bits2 & 0x3, '?')
 
     # ----------------------------------------------------------------
-    def synthesize(self, bits4: int) -> np.ndarray:
+    def synthesize(self, bits2: int) -> np.ndarray:
         """
-        4bits → 200ms の音声バッファ（float32, -1.0〜1.0）を返す。
+        2bits → 200ms の音声バッファ（float32, -1.0〜1.0）を返す。
 
         Returns:
             np.ndarray shape=(AUDIO_FRAME_SAMPLES,) dtype=float32
         """
-        bits4 = bits4 & 0xF
-        consonant_bits = (bits4 >> 2) & 0x3
-        vowel_bits     = bits4 & 0x3
+        bits2 = bits2 & 0x3
+        vowel = PHONEME_VOWEL[bits2]
+        f1, f2 = PHONEME_FORMANTS[vowel]
 
-        consonant = PHONEME_CONSONANT[consonant_bits]
-        vowel     = PHONEME_VOWEL[vowel_bits]
-        f1, f2    = PHONEME_FORMANTS[vowel]
-
-        n = AUDIO_FRAME_SAMPLES
+        n  = AUDIO_FRAME_SAMPLES
         sr = AUDIO_SAMPLE_RATE
-        t = np.linspace(0, AUDIO_FRAME_MS / 1000.0, n, endpoint=False)
+        t  = np.linspace(0, AUDIO_FRAME_MS / 1000.0, n, endpoint=False)
 
-        # ---- 母音サイン波（F1 + F2）----
+        # F1 + F2 のサイン波（母音のみ）
         buf = (0.6 * np.sin(2 * np.pi * f1 * t) +
                0.4 * np.sin(2 * np.pi * f2 * t))
 
-        # ---- 調音の重ね合わせ ----
-        if consonant == 's':
-            # 冒頭 AUDIO_SIBILANT_MS ms にホワイトノイズ
-            sib_n = int(sr * AUDIO_SIBILANT_MS / 1000)
-            noise = np.random.randn(sib_n)
-            # 1500Hz 以上のハイパスフィルタ（簡易: 差分で近似）
-            noise_hp = np.diff(noise, prepend=noise[0])
-            buf[:sib_n] += 0.5 * noise_hp
-
-        elif consonant in ('n', 'm'):
-            # 鼻腔共鳴を加算
-            nasal = AUDIO_NASAL_GAIN * np.sin(2 * np.pi * AUDIO_NASAL_FREQ * t)
-            buf += nasal
-
-            if consonant == 'm':
-                # 冒頭 AUDIO_BILABIAL_MS ms を無音
-                bilabial_n = int(sr * AUDIO_BILABIAL_MS / 1000)
-                buf[:bilabial_n] = 0.0
-
-        # ---- フェードイン/アウト（クリックノイズ防止）----
+        # フェードイン/アウト（クリックノイズ防止）
         fade_n = min(int(sr * 0.005), n // 4)   # 5ms
         buf[:fade_n]  *= np.linspace(0, 1, fade_n)
         buf[-fade_n:] *= np.linspace(1, 0, fade_n)
 
-        # ---- 正規化 ----
+        # 正規化
         peak = np.max(np.abs(buf))
         if peak > 0:
             buf = buf / peak * 0.8
@@ -145,12 +126,11 @@ class PhonemeConverter:
         return buf.astype(np.float32)
 
     # ----------------------------------------------------------------
-    def play(self, bits4: int) -> None:
+    def play(self, bits2: int) -> None:
         """synthesize() の結果を pygame.mixer でリアルタイム出力する。"""
         if not (_pygame_available and _mixer_ready):
             return
-        buf = self.synthesize(bits4)
-        # float32 → int16 に変換して Sound オブジェクト化
+        buf = self.synthesize(bits2)
         pcm = (buf * 32767).astype(np.int16)
         try:
             sound = pygame.sndarray.make_sound(pcm)
@@ -161,24 +141,31 @@ class PhonemeConverter:
         except Exception:
             pass
 
+    def play_all_demo(self, interval_ms: int = 400) -> None:
+        """全4音素を順番に再生するデモ（モデル音源確認用）。"""
+        import time
+        for bits2 in range(4):
+            self.play(bits2)
+            time.sleep(interval_ms / 1000.0)
+
 
 # ================================================================
 class PhonemeDecoder:
     """
-    マイク入力（pyaudio）→ FFT → 4bits 復元。
+    マイク入力（pyaudio）→ F1/F2比率判定 → 2bits 復元。
 
-    処理フロー:
-      200ms 分のマイク入力 → FFT → F1/F2 ピーク検出 → 母音特定 → 下位2bits
-      1500Hz 以上エネルギー → s 判定
-      250〜300Hz 鼻腔共鳴  → n/m 判定
-      冒頭無音              → m 確定
-      → 4bits 復元
+    検知方法（比率ベース、音量・話者依存なし）:
+      1. FFT でスペクトルを取得
+      2. F1帯域（200〜1000Hz）と F2帯域（1000〜2600Hz）のピーク周波数を検出
+      3. F2/F1比率と F1絶対値で母音を判定
 
-    マイクが利用できない環境ではダミー値を返す。
+    5Hz同期読み取り:
+      record_frame_sync() を呼ぶと200ms録音して即座に判定を返す。
+      パルス発火タイミングに合わせて呼ぶこと。
     """
 
     def __init__(self):
-        self._pa: "pyaudio.PyAudio | None" = None
+        self._pa     = None
         self._stream = None
         self._available = False
 
@@ -187,8 +174,7 @@ class PhonemeDecoder:
 
         try:
             self._pa = pyaudio.PyAudio()
-            # デフォルトマイクが存在するか確認
-            info = self._pa.get_default_input_device_info()
+            self._pa.get_default_input_device_info()
             self._stream = self._pa.open(
                 format=pyaudio.paFloat32,
                 channels=1,
@@ -198,7 +184,6 @@ class PhonemeDecoder:
             )
             self._available = True
         except Exception:
-            # マイクなし環境（ヘッドレス等）ではダミーモードで動作
             self._available = False
 
     def __del__(self):
@@ -223,9 +208,6 @@ class PhonemeDecoder:
         """
         200ms 分のマイク入力を取得する。
         マイクが利用不可の場合はゼロ配列を返す。
-
-        Returns:
-            np.ndarray shape=(AUDIO_FRAME_SAMPLES,) dtype=float32
         """
         if not self._available or self._stream is None:
             return np.zeros(AUDIO_FRAME_SAMPLES, dtype=np.float32)
@@ -236,95 +218,87 @@ class PhonemeDecoder:
             return np.zeros(AUDIO_FRAME_SAMPLES, dtype=np.float32)
 
     # ----------------------------------------------------------------
+    def detect_f1_f2(self, frame: np.ndarray) -> tuple[float, float]:
+        """
+        FFT でスペクトルを取得し、F1・F2 のピーク周波数を返す。
+
+        Returns:
+            (f1_hz, f2_hz): F1帯域と F2帯域のピーク周波数
+        """
+        if not _scipy_available or len(frame) == 0:
+            return 0.0, 0.0
+
+        n     = len(frame)
+        spec  = np.abs(rfft(frame))
+        freqs = rfftfreq(n, d=1.0 / AUDIO_SAMPLE_RATE)
+
+        # スペクトルを平滑化（ノイズ低減）
+        from numpy.lib.stride_tricks import sliding_window_view
+        win = 5
+        if len(spec) > win:
+            spec_smooth = np.convolve(spec, np.ones(win) / win, mode='same')
+        else:
+            spec_smooth = spec
+
+        def peak_freq(lo, hi):
+            mask = (freqs >= lo) & (freqs <= hi)
+            if not np.any(mask):
+                return 0.0
+            return float(freqs[mask][np.argmax(spec_smooth[mask])])
+
+        f1 = peak_freq(200,  1000)
+        f2 = peak_freq(1000, 2600)
+        return f1, f2
+
+    # ----------------------------------------------------------------
     def detect_vowel(self, frame: np.ndarray) -> int:
         """
-        FFT で F1/F2 ピークを検出し、母音を特定して下位2bits（0〜3）を返す。
+        F1/F2比率判定で母音を特定し、2bits（0〜3）を返す。
+
+        判定ツリー:
+          F2/F1 > VOWEL_F2F1_I → い (01)
+          F1 > VOWEL_F1_A      → あ (11)
+          F2 < VOWEL_F2_U      → う (00)
+          else                 → お (10)
 
         Returns:
             int: 0=u, 1=i, 2=o, 3=a
         """
-        if not _scipy_available:
-            return 0
+        f1, f2 = self.detect_f1_f2(frame)
 
-        n = len(frame)
-        spectrum = np.abs(rfft(frame))
-        freqs    = rfftfreq(n, d=1.0 / AUDIO_SAMPLE_RATE)
+        if f1 <= 0:
+            return 0   # 無音 → う
 
-        def peak_in_band(lo, hi):
-            mask = (freqs >= lo) & (freqs <= hi)
-            if not np.any(mask):
-                return 0.0
-            return float(np.max(spectrum[mask]))
+        ratio = f2 / f1
 
-        # F1 帯域（200〜1000Hz）
-        f1_energy = {
-            'a': peak_in_band(600, 1000),
-            'i': peak_in_band(200,  400),
-            'u': peak_in_band(200,  400),
-            'o': peak_in_band(400,  600),
-        }
-        # F2 帯域（700〜2500Hz）
-        f2_energy = {
-            'a': peak_in_band(1000, 1400),
-            'i': peak_in_band(2000, 2600),
-            'u': peak_in_band( 700,  900),
-            'o': peak_in_band( 700,  900),
-        }
-
-        scores = {v: f1_energy[v] + f2_energy[v] for v in ('a', 'i', 'u', 'o')}
-        best_vowel = max(scores, key=scores.get)
-
-        vowel_to_bits = {'u': 0, 'i': 1, 'o': 2, 'a': 3}
-        return vowel_to_bits[best_vowel]
-
-    # ----------------------------------------------------------------
-    def detect_consonant(self, frame: np.ndarray) -> int:
-        """
-        周波数エネルギー分析で調音を判定し、上位2bits（0〜3）を返す。
-
-        Returns:
-            int: 0=None, 1=s, 2=n, 3=m
-        """
-        if not _scipy_available:
-            return 0
-
-        n = len(frame)
-        spectrum = np.abs(rfft(frame))
-        freqs    = rfftfreq(n, d=1.0 / AUDIO_SAMPLE_RATE)
-
-        def band_energy(lo, hi):
-            mask = (freqs >= lo) & (freqs <= hi)
-            return float(np.mean(spectrum[mask])) if np.any(mask) else 0.0
-
-        total_energy = float(np.mean(spectrum)) + 1e-10
-
-        # s 判定: 1500Hz 以上のエネルギーが高い
-        sib_ratio = band_energy(AUDIO_SIBILANT_FREQ, AUDIO_SAMPLE_RATE // 2) / total_energy
-
-        # n/m 判定: 250〜300Hz の鼻腔共鳴
-        nasal_ratio = band_energy(250, 300) / total_energy
-
-        # m 判定: 冒頭 10ms が無音
-        bilabial_n = int(AUDIO_SAMPLE_RATE * AUDIO_BILABIAL_MS / 1000)
-        onset_rms  = float(np.sqrt(np.mean(frame[:bilabial_n] ** 2))) if bilabial_n > 0 else 1.0
-        is_bilabial = onset_rms < 0.01
-
-        if sib_ratio > 0.4:
-            return 1   # s
-        if nasal_ratio > 0.15:
-            if is_bilabial:
-                return 3   # m
-            return 2       # n
-        return 0           # クリーン
+        if ratio > VOWEL_F2F1_I:
+            return 1   # い
+        if f1 > VOWEL_F1_A:
+            return 3   # あ
+        if f2 < VOWEL_F2_U:
+            return 0   # う
+        return 2       # お
 
     # ----------------------------------------------------------------
     def decode(self, frame: np.ndarray) -> int:
         """
-        フレームから 4bits 整数を復元する。
+        フレームから 2bits 整数を復元する。
 
         Returns:
-            int: 0〜15
+            int: 0〜3
         """
-        consonant_bits = self.detect_consonant(frame)
-        vowel_bits     = self.detect_vowel(frame)
-        return ((consonant_bits & 0x3) << 2) | (vowel_bits & 0x3)
+        return self.detect_vowel(frame) & 0x3
+
+    # ----------------------------------------------------------------
+    def record_frame_sync(self) -> tuple[np.ndarray, int]:
+        """
+        5Hz同期読み取り用。
+        200ms録音して即座に判定し (frame, bits2) を返す。
+        パルス発火タイミングに合わせて呼ぶこと。
+
+        Returns:
+            (frame, bits2)
+        """
+        frame = self.record_frame()
+        bits2 = self.decode(frame)
+        return frame, bits2
