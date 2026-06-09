@@ -585,27 +585,29 @@ class Game:
                 self.done_message = "GAME OVER"
             self.done_timer = FPS * 3
 
+    # tracked_agentを再計算する間隔（1000フレームごと）
+    TRACK_UPDATE_INTERVAL = 1000
+
     def _update_ga_monitor(self, dt: float):
         """監視モード（通常速度）のGA更新。
-        追従エージェントをself.tracked_agentに導出・維持し、
-        音声・モニター描画と同じエージェントを参照する。
+        tracked_agentは1000フレームごとに再計算する。
+        頑繁に切り替わるとUIと音声の整合性が崩れるため。
         """
         if not self.ga_running:
             return
         self._step_ga_once()
 
-        # 追従エージェントを決定する（生存中の最高報酬）
         alive_agents = [ag for ag in self.ga_agents if ag.car.alive]
-        if alive_agents:
-            new_best = max(alive_agents, key=lambda ag: ag.total_reward)
-        else:
-            new_best = None
 
-        # 追従先が変わった場合、旧追従先の音声を必ずオフにしてから切り替える
-        if self.tracked_agent is not new_best:
-            if self.tracked_agent is not None and hasattr(self.tracked_agent, 'bn'):
-                self.tracked_agent.bn.audio_enabled = False
-            self.tracked_agent = new_best
+        # tracked_agentが死亡した場合は即座に再選択する
+        if self.tracked_agent is not None and not self.tracked_agent.car.alive:
+            self._switch_tracked_agent(alive_agents)
+        # tracked_agentが未設定の場合も即座に選択する
+        elif self.tracked_agent is None and alive_agents:
+            self._switch_tracked_agent(alive_agents)
+        # 1000フレームごとに一位個体を再計算して追従先を更新
+        elif self.ga_frame % self.TRACK_UPDATE_INTERVAL == 0 and alive_agents:
+            self._switch_tracked_agent(alive_agents)
 
         # 追従エージェントに音声を属当（音声ON時のみ）
         if self.tracked_agent is not None and hasattr(self.tracked_agent, 'bn'):
@@ -614,6 +616,21 @@ class Game:
                 self.tracked_agent.bn.converter     = self.audio_bn.converter
             else:
                 self.tracked_agent.bn.audio_enabled = False
+
+    def _switch_tracked_agent(self, alive_agents: list):
+        """追従エージェントを切り替える。
+        旧追従先の音声を必ずオフにしてから新しい追従先を設定する。
+        """
+        if not alive_agents:
+            if self.tracked_agent is not None and hasattr(self.tracked_agent, 'bn'):
+                self.tracked_agent.bn.audio_enabled = False
+            self.tracked_agent = None
+            return
+        new_best = max(alive_agents, key=lambda ag: ag.total_reward)
+        if self.tracked_agent is not new_best:
+            if self.tracked_agent is not None and hasattr(self.tracked_agent, 'bn'):
+                self.tracked_agent.bn.audio_enabled = False
+            self.tracked_agent = new_best
 
     # ----------------------------------------------------------------
     def _get_camera_focus(self) -> pygame.Vector2:
