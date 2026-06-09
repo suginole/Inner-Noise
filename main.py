@@ -382,6 +382,7 @@ class Game:
                 'last_motor_gru':   self.prev_best_genome.motor.last_gru_act,
                 'last_output':      self.prev_best_genome.motor.last_output_act,
                 'sensory':          self.prev_best_genome.sensory,
+                'motor':            self.prev_best_genome.motor,
             })(),
             dummy_obs
         )
@@ -793,6 +794,7 @@ class Game:
                     'last_motor_gru':   fast_display_genome.motor.last_gru_act,
                     'last_output':      fast_display_genome.motor.last_output_act,
                     'sensory':          fast_display_genome.sensory,
+                    'motor':            fast_display_genome.motor,
                 })(),
                 dummy_obs
             )

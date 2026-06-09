@@ -827,22 +827,24 @@ class Renderer:
         title = self.font_s.render("SENSORY NN", True, (100, 160, 255))
         self.screen.blit(title, (x + 6, y + 4))
 
-        inp_acts    = getattr(genome, 'last_input_act',   [0.0] * 12)
-        cortex_acts = getattr(genome, 'last_cortex_act',  [0.0] * 16)
-        gru_acts    = getattr(genome, 'last_sensory_gru', [0.0] * 16)
-        pulse_acts  = getattr(genome, 'last_pulse_act',   [0, 0])
+        inp_acts    = getattr(genome, 'last_input_act',      [0.0] * 12)
+        cortex_acts = getattr(genome, 'last_cortex_act',     [0.0] * 16)  # 入力FF
+        gru_acts    = getattr(genome, 'last_sensory_gru',    [0.0] * 16)
+        integ_acts  = getattr(genome, 'last_sensory_integ',  [0.0] * 16)  # 統合FF
+        pulse_acts  = getattr(genome, 'last_pulse_act',      [0, 0])
 
         inp_labels = ["E","Ga","Gx","Gy","Fx","Fy"] + \
                      [f"R{i}" for i in range(VISION_RAYS)] + ["Fc"]
 
-        node_r   = 4
+        node_r   = 3
         node_gap = 12
         row_top  = y + 18
-        # 4列の水平位置
-        col_inp    = x + 26
-        col_cortex = x + int(w * 0.38)
-        col_gru    = x + int(w * 0.62)
-        col_pulse  = x + w - 18
+        # 5列の水平位置
+        col_inp    = x + 22
+        col_cortex = x + int(w * 0.28)
+        col_gru    = x + int(w * 0.47)
+        col_integ  = x + int(w * 0.66)
+        col_pulse  = x + w - 16
 
         def _bipolar_color(v):
             if v >= 0:
@@ -871,37 +873,58 @@ class Renderer:
 
         sy_inp,    n_inp    = _draw_col(inp_acts,    col_inp,    bipolar=False, labels=inp_labels)
         sy_cortex, n_cortex = _draw_col(cortex_acts, col_cortex, bipolar=True)
-        sy_gru,    n_gru    = _draw_col(gru_acts,    col_gru,    bipolar=True)
+
+        # GRU列（継承領域と非継承領域を区切り線で分離）
+        n_gru = len(gru_acts)
+        sy_gru = row_top + max(0, (h - 28 - n_gru * node_gap) // 2)
+        for i, v in enumerate(gru_acts):
+            ny = sy_gru + i * node_gap
+            # 上位8次元（継承）は明るいボーダー、下位8（非継承）は暗いボーダー
+            border = (80, 120, 200) if i < 8 else (30, 50, 80)
+            c = _bipolar_color(float(v))
+            pygame.draw.circle(self.screen, c, (col_gru, ny), node_r)
+            pygame.draw.circle(self.screen, border, (col_gru, ny), node_r, 1)
+        # 継承/非継承の境界線
+        if n_gru > 8:
+            sep_y = sy_gru + 8 * node_gap - node_gap // 2
+            pygame.draw.line(self.screen, (60, 80, 120),
+                             (col_gru - 8, sep_y), (col_gru + 8, sep_y), 1)
+
+        sy_integ, n_integ = _draw_col(integ_acts,  col_integ, bipolar=True)
 
         # パルス符号化列（2ビット）
         n_pulse = len(pulse_acts)
-        sy_pulse = row_top + max(0, (h - 28 - n_pulse * 28) // 2)
+        sy_pulse = row_top + max(0, (h - 28 - n_pulse * 26) // 2)
         for i, bit in enumerate(pulse_acts):
-            ny = sy_pulse + i * 28
+            ny = sy_pulse + i * 26
             c = C_PULSE_ON if bit else C_PULSE_OFF
-            pygame.draw.rect(self.screen, c, (col_pulse - 10, ny, 18, 20))
-            pygame.draw.rect(self.screen, C_GRAY, (col_pulse - 10, ny, 18, 20), 1)
+            pygame.draw.rect(self.screen, c, (col_pulse - 9, ny, 16, 18))
+            pygame.draw.rect(self.screen, C_GRAY, (col_pulse - 9, ny, 16, 18), 1)
             bt = self.font_s.render(str(bit), True, C_WHITE if bit else C_GRAY)
-            self.screen.blit(bt, (col_pulse - 10 + 9 - bt.get_width()//2, ny + 4))
+            self.screen.blit(bt, (col_pulse - 9 + 8 - bt.get_width()//2, ny + 3))
 
         # 層間エッジ（上位8本）
         sensory_nn = getattr(genome, 'sensory', None)
         if sensory_nn is not None:
             self._draw_edges(inp_acts,    sy_inp,    col_inp,    node_r,
                              cortex_acts, sy_cortex, col_cortex, node_r,
-                             getattr(sensory_nn, 'W_cortex', None))
+                             getattr(sensory_nn, 'W_input', None))
             self._draw_edges(cortex_acts, sy_cortex, col_cortex, node_r,
                              gru_acts,    sy_gru,    col_gru,    node_r,
                              getattr(sensory_nn, 'Wh', None))
+            self._draw_edges(gru_acts,    sy_gru,    col_gru,    node_r,
+                             integ_acts,  sy_integ,  col_integ,  node_r,
+                             getattr(sensory_nn, 'W_integ', None))
 
         # 凡例・列ラベル
         leg = self.font_s.render("赤=+ 暗=0 青=-", True, (80, 100, 160))
         self.screen.blit(leg, (x + 4, y + h - 14))
         for lbl, lx, lc in [
-            ("IN",  col_inp,    (80, 120, 220)),
-            ("FF",  col_cortex, (90, 130, 220)),
-            ("GRU", col_gru,    (100, 140, 220)),
-            ("P",   col_pulse,  (200, 200, 80)),
+            ("IN",   col_inp,    (80, 120, 220)),
+            ("FF",   col_cortex, (90, 130, 220)),
+            ("GRU",  col_gru,    (100, 140, 220)),
+            ("INT",  col_integ,  (110, 150, 220)),
+            ("P",    col_pulse,  (200, 200, 80)),
         ]:
             lt = self.font_s.render(lbl, True, lc)
             self.screen.blit(lt, (lx - lt.get_width() // 2, y + h - 14))
@@ -987,19 +1010,21 @@ class Renderer:
 
         embed_acts  = getattr(genome, 'last_embed_act',        [0.0] * 16)
         gru_acts    = getattr(genome, 'last_motor_gru',        [0.0] * 16)
+        integ_acts  = getattr(genome, 'last_motor_integ',      [0.0] * 16)  # 統合FF
         cortex_acts = getattr(genome, 'last_motor_cortex_act', [0.0] * 12)
         out_acts    = getattr(genome, 'last_output_act',       [0.5, 0.5, 0.0])
         out_labels  = ["Acc", "Str", "Brk"]
 
-        node_r   = 4
+        node_r   = 3
         node_gap = 12
         row_top  = y + 18
-        # 4列の水平位置
-        col_embed  = x + 18
-        col_gru    = x + int(w * 0.30)
-        col_cortex = x + int(w * 0.54)
-        col_out    = x + int(w * 0.76)
-        bar_w      = w - (col_out - x) - 8
+        # 5列の水平位置
+        col_embed  = x + 16
+        col_gru    = x + int(w * 0.26)
+        col_integ  = x + int(w * 0.46)
+        col_cortex = x + int(w * 0.64)
+        col_out    = x + int(w * 0.80)
+        bar_w      = w - (col_out - x) - 6
 
         def _bipolar_color(v):
             if v >= 0:
@@ -1020,7 +1045,22 @@ class Renderer:
             return sy, n
 
         sy_embed,  n_embed  = _draw_col(embed_acts,  col_embed)
-        sy_gru,    n_gru    = _draw_col(gru_acts,    col_gru)
+
+        # GRU列（継承/非継承境界線）
+        n_gru = len(gru_acts)
+        sy_gru = row_top + max(0, (h - 28 - n_gru * node_gap) // 2)
+        for i, v in enumerate(gru_acts):
+            ny = sy_gru + i * node_gap
+            border = (200, 80, 80) if i < 8 else (60, 20, 20)
+            c = _bipolar_color(float(v))
+            pygame.draw.circle(self.screen, c, (col_gru, ny), node_r)
+            pygame.draw.circle(self.screen, border, (col_gru, ny), node_r, 1)
+        if n_gru > 8:
+            sep_y = sy_gru + 8 * node_gap - node_gap // 2
+            pygame.draw.line(self.screen, (100, 40, 40),
+                             (col_gru - 8, sep_y), (col_gru + 8, sep_y), 1)
+
+        sy_integ,  n_integ  = _draw_col(integ_acts,  col_integ)
         sy_cortex, n_cortex = _draw_col(cortex_acts, col_cortex)
 
         # OUTPUT列（バー + 数値）
@@ -1043,6 +1083,9 @@ class Renderer:
                              gru_acts,    sy_gru,    col_gru,    node_r,
                              getattr(motor_nn, 'Wh', None))
             self._draw_edges(gru_acts,    sy_gru,    col_gru,    node_r,
+                             integ_acts,  sy_integ,  col_integ,  node_r,
+                             getattr(motor_nn, 'W_integ', None))
+            self._draw_edges(integ_acts,  sy_integ,  col_integ,  node_r,
                              cortex_acts, sy_cortex, col_cortex, node_r,
                              getattr(motor_nn, 'W_cortex', None))
             self._draw_edges(cortex_acts, sy_cortex, col_cortex, node_r,
@@ -1056,6 +1099,7 @@ class Renderer:
         for lbl, lx, lc in [
             ("EMB",  col_embed,  (200, 80, 80)),
             ("GRU",  col_gru,    (210, 90, 90)),
+            ("INT",  col_integ,  (215, 95, 95)),
             ("FF",   col_cortex, (220, 100, 100)),
             ("OUT",  col_out + bar_w // 2, (240, 120, 120)),
         ]:
