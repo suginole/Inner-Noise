@@ -49,22 +49,22 @@ class GAGenome:
 
         # アクティベーション記録（可視化用）
         self.last_input_act:        list[float] = [0.0] * OBS_DIM
-        self.last_l3_act:           list[float] = [0.0] * L3_OUT_DIM       # 第三層FF出力
-        self.last_sensory_buf:      list[float] = [0.0] * BUF_GRU_DIM      # センサリーバッファGRU
+        self.last_l3_act:           list[float] = [0.0] * L3_OUT_DIM       # 第三層FF出力(24)
+        self.last_sensory_buf:      list[float] = [0.0] * BUF_GRU_DIM      # センサリーバッファGRU(5)
         self.last_sensory_buf_active: bool = False
-        self.last_sensory_gru:      list[float] = [0.0] * MEM_GRU_DIM      # 感覚記憶GRU
+        self.last_sensory_gru:      list[float] = [0.0] * MEM_GRU_DIM      # 感覚記憶GRU(12)
         self.last_pulse_act:        list[int]   = [0, 0]                    # パルス符号化後
-        self.last_motor_l3_act:     list[float] = [0.0] * L3_OUT_DIM       # モーター第三層FF
-        self.last_motor_buf:        list[float] = [0.0] * BUF_GRU_DIM      # モーターバッファGRU
+        self.last_motor_l3_act:     list[float] = [0.0] * L3_OUT_DIM       # モーター第三層FF(24)
+        self.last_motor_buf:        list[float] = [0.0] * BUF_GRU_DIM      # モーターバッファGRU(5)
         self.last_motor_buf_active: bool = False
-        self.last_motor_gru:        list[float] = [0.0] * MEM_GRU_DIM      # 運動記憶GRU
+        self.last_motor_gru:        list[float] = [0.0] * MEM_GRU_DIM      # 運動記憶GRU(12)
         self.last_output_act:       list[float] = [0.5, 0.5, 0.0]          # 出力
         # 互換性維持用エイリアス（旧名→新名）
         self.last_cortex_act:       list[float] = self.last_l3_act
-        self.last_sensory_integ:    list[float] = [0.0] * L1_OUT_DIM
+        self.last_sensory_integ:    list[float] = [0.0] * L1_OUT_DIM       # (24)
         self.last_embed_act:        list[float] = self.last_motor_l3_act
-        self.last_motor_integ:      list[float] = [0.0] * L1_OUT_DIM
-        self.last_motor_cortex_act: list[float] = [0.0] * L1_OUT_DIM
+        self.last_motor_integ:      list[float] = [0.0] * L1_OUT_DIM       # (24)
+        self.last_motor_cortex_act: list[float] = [0.0] * L1_OUT_DIM       # (24)
         self.last_hidden_act:       list[float] = self.last_l3_act
         self.last_hidden2_act:      list[float] = self.last_sensory_gru
 
@@ -82,33 +82,33 @@ class GAGenome:
         g.fitness    = 0.0
         g.species_id = -1
         g.last_input_act          = [0.0] * OBS_DIM
-        g.last_l3_act             = [0.0] * L3_OUT_DIM
-        g.last_sensory_buf        = [0.0] * BUF_GRU_DIM
+        g.last_l3_act             = [0.0] * L3_OUT_DIM       # (24)
+        g.last_sensory_buf        = [0.0] * BUF_GRU_DIM      # (5)
         g.last_sensory_buf_active = False
-        g.last_sensory_gru        = [0.0] * MEM_GRU_DIM
+        g.last_sensory_gru        = [0.0] * MEM_GRU_DIM      # (12)
         g.last_pulse_act          = [0, 0]
-        g.last_motor_l3_act       = [0.0] * L3_OUT_DIM
-        g.last_motor_buf          = [0.0] * BUF_GRU_DIM
+        g.last_motor_l3_act       = [0.0] * L3_OUT_DIM       # (24)
+        g.last_motor_buf          = [0.0] * BUF_GRU_DIM      # (5)
         g.last_motor_buf_active   = False
-        g.last_motor_gru          = [0.0] * MEM_GRU_DIM
+        g.last_motor_gru          = [0.0] * MEM_GRU_DIM      # (12)
         g.last_output_act         = [0.5, 0.5, 0.0]
         g.last_cortex_act         = g.last_l3_act
-        g.last_sensory_integ      = [0.0] * L1_OUT_DIM
+        g.last_sensory_integ      = [0.0] * L1_OUT_DIM       # (24)
         g.last_embed_act          = g.last_motor_l3_act
-        g.last_motor_integ        = [0.0] * L1_OUT_DIM
-        g.last_motor_cortex_act   = [0.0] * L1_OUT_DIM
+        g.last_motor_integ        = [0.0] * L1_OUT_DIM       # (24)
+        g.last_motor_cortex_act   = [0.0] * L1_OUT_DIM       # (24)
         g.last_hidden_act         = g.last_l3_act
         g.last_hidden2_act        = g.last_sensory_gru
 
         ss = SensoryNN.flat_size()
 
         g.sensory = SensoryNN.__new__(SensoryNN)
-        g.sensory.last_l3_act      = [0.0] * L3_OUT_DIM
-        g.sensory.last_buf_act     = [0.0] * BUF_GRU_DIM
+        g.sensory.last_l3_act      = [0.0] * L3_OUT_DIM      # (24)
+        g.sensory.last_buf_act     = [0.0] * BUF_GRU_DIM     # (5)
         g.sensory.last_buf_active  = False
-        g.sensory.last_gru_act     = [0.0] * MEM_GRU_DIM
-        g.sensory.last_bypass_act  = [0.0] * BYPASS_FF_DIM
-        g.sensory.last_integ_act   = [0.0] * L1_OUT_DIM
+        g.sensory.last_gru_act     = [0.0] * MEM_GRU_DIM     # (12)
+        g.sensory.last_bypass_act  = [0.0] * BYPASS_FF_DIM   # (16)
+        g.sensory.last_integ_act   = [0.0] * L1_OUT_DIM      # (24)
         g.sensory.last_pulse       = [0, 0]
         g.sensory.last_input_act   = g.sensory.last_l3_act
         g.sensory.last_cortex_act  = g.sensory.last_l3_act
@@ -120,12 +120,12 @@ class GAGenome:
         g.sensory._h_mem           = g.sensory._init_h_mem()
 
         g.motor = MotorNN.__new__(MotorNN)
-        g.motor.last_l3_act        = [0.0] * L3_OUT_DIM
-        g.motor.last_buf_act       = [0.0] * BUF_GRU_DIM
+        g.motor.last_l3_act        = [0.0] * L3_OUT_DIM      # (24)
+        g.motor.last_buf_act       = [0.0] * BUF_GRU_DIM     # (5)
         g.motor.last_buf_active    = False
-        g.motor.last_gru_act       = [0.0] * MEM_GRU_DIM
-        g.motor.last_bypass_act    = [0.0] * BYPASS_FF_DIM
-        g.motor.last_integ_act     = [0.0] * L1_OUT_DIM
+        g.motor.last_gru_act       = [0.0] * MEM_GRU_DIM     # (12)
+        g.motor.last_bypass_act    = [0.0] * BYPASS_FF_DIM   # (16)
+        g.motor.last_integ_act     = [0.0] * L1_OUT_DIM      # (24)
         g.motor.last_output_act    = [0.5, 0.5, 0.0]
         g.motor.last_embed_act     = g.motor.last_l3_act
         g.motor.last_cortex_act    = g.motor.last_integ_act

@@ -828,10 +828,10 @@ class Renderer:
         self.screen.blit(title, (x + 6, y + 4))
 
         inp_acts    = getattr(genome, 'last_input_act',        [0.0] * 12)
-        l3_acts     = getattr(genome, 'last_l3_act',           [0.0] * 10)  # 第三層FF(10)
-        buf_acts    = getattr(genome, 'last_sensory_buf',      [0.0] * 5)   # バッファGRU(5)
+        l3_acts     = getattr(genome, 'last_l3_act',           [0.0] * L3_OUT_DIM)   # 第三層FF(24)
+        buf_acts    = getattr(genome, 'last_sensory_buf',      [0.0] * BUF_GRU_DIM)  # バッファGRU(5)
         buf_active  = getattr(genome, 'last_sensory_buf_active', False)
-        gru_acts    = getattr(genome, 'last_sensory_gru',      [0.0] * 12)  # 記憶GRU(12)
+        gru_acts    = getattr(genome, 'last_sensory_gru',      [0.0] * MEM_GRU_DIM)  # 記憶GRU(12)
         pulse_acts  = getattr(genome, 'last_pulse_act',        [0, 0])
 
         inp_labels = ["E","Ga","Gx","Gy","Fx","Fy"] + \
@@ -1050,11 +1050,11 @@ class Renderer:
         title = self.font_s.render("MOTOR NN", True, (255, 100, 100))
         self.screen.blit(title, (x + 6, y + 4))
 
-        pulse_acts  = getattr(genome, 'last_pulse_act',        [0, 0])       # 2bit入力
-        l3_acts     = getattr(genome, 'last_motor_l3_act',     [0.0] * 10)   # 第三層FF(10)
-        buf_acts    = getattr(genome, 'last_motor_buf',        [0.0] * 5)    # バッファGRU(5)
+        pulse_acts  = getattr(genome, 'last_pulse_act',        [0, 0])                   # 2bit入力
+        l3_acts     = getattr(genome, 'last_motor_l3_act',     [0.0] * L3_OUT_DIM)   # 第三層FF(24)
+        buf_acts    = getattr(genome, 'last_motor_buf',        [0.0] * BUF_GRU_DIM)  # バッファGRU(5)
         buf_active  = getattr(genome, 'last_motor_buf_active', False)
-        gru_acts    = getattr(genome, 'last_motor_gru',        [0.0] * 12)   # 記憶GRU(12)
+        gru_acts    = getattr(genome, 'last_motor_gru',        [0.0] * MEM_GRU_DIM)  # 記憶GRU(12)
         out_acts    = getattr(genome, 'last_output_act',       [0.5, 0.5, 0.0])
         out_labels  = ["Acc", "Str", "Brk"]
 

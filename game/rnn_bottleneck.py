@@ -1,27 +1,27 @@
 """
-rnn_bottleneck.py — RNNボトルネック本実装（バッファGRU挿入型・対称構造）
+rnn_bottleneck.py — RNNボトルネック本実装（バッファGRU挿入型・対称構造 v2）
 
 設計方針:
   センサリーNN・モーターNNともに同じ対称構造。
-  第三層FFから第二層（記憶GRU + 通常FF）への通常フローの間に
-  バッファGRUが横入りする形で挿入される。
+  第三層FF → バッファGRU（横入り）→ 第二層（記憶GRU + 通常FF）→ 第一層FF → OUT
 
 層構成（センサリー/モーター共通）:
-  第三層FF → [バッファGRU（パルス受信時のみ更新）] → 記憶GRU + 通常FF → 第一層FF → 出力
+  第三層FF(→24) → バッファGRU(12→5, パルス受信時のみ更新)
+               → 記憶GRU(17→12) + 通常FF(12→16) → 第一層FF(28→24) → 出力
 
 バッファGRUの特性:
+  - 入力: 第三層バッファノード[12:24] (12次元)
+  - 出力: buf_out (5次元)
   - パルス受信フレームのみ隠れ状態を更新（非受信フレームは凍結）
-  - 出力buf_outは次のパルス受信まで固定保持
-  - 記憶GRUの非継承領域（下位6次元）への入力として注入
-  - 重みはGAが進化させる（継承）、隠れ状態は非継承
+  - 記憶GRUへの入力として注入（通常ノード12 + buf_out5 = 17次元）
 
 記憶GRUの隠れ状態分割:
   上位6次元: GA継承領域（γから復元）
-  下位6次元: 非継承領域（ゼロ初期化、バッファGRU出力が入力として影響）
+  下位6次元: 非継承領域（ゼロ初期化）
 
-センサリーNN パラメータ: 1,409次元
-モーターNN パラメータ:  1,320次元
-合計:                   2,729次元
+センサリーNN パラメータ: 2,622次元
+モーターNN パラメータ:  2,407次元
+合計:                   5,029次元
 """
 from __future__ import annotations
 import numpy as np
@@ -54,26 +54,19 @@ def gru_step(x: np.ndarray, h: np.ndarray,
 # ================================================================
 class SensoryNN:
     """
-    感覚NN。obs(12) → 2bitsパルス。
+    感覚NN。obs(12) → 2bitsパルス。v2仕様。
 
     obs(12)
-      → 第三層FF(12→10, tanh)
-          通常ノード[0:5] → 記憶GRU入力 + 通常FF入力
-          バッファノード[5:10] → バッファGRU入力（パルス受信時のみ更新）
-      → バッファGRU(5→5) ← パルス受信フレームのみ更新
-      → 記憶GRU(10→12) ← 入力=concat(通常ノード[0:5], buf_out[0:5])
-      → 通常FF(5→8, tanh) ← 入力=通常ノード[0:5]のみ
-      → 第一層FF(20→10, tanh) ← 入力=concat(記憶GRU出力, 通常FF出力)
-      → パルス符号化FF(10→2, tanh) → Step → 2bits
+      → 第三層FF(12→24, tanh)
+          通常ノード[0:12] → 記憶GRU入力 + 通常FF入力
+          バッファノード[12:24] → バッファGRU入力（パルス受信時のみ更新）
+      → バッファGRU(12→5) ← パルス受信フレームのみ更新
+      → 記憶GRU(17→12) ← 入力=concat(通常ノード[0:12], buf_out[0:5])
+      → 通常FF(12→16, tanh) ← 入力=通常ノード[0:12]のみ
+      → 第一層FF(28→24, tanh) ← 入力=concat(記憶GRU出力12, 通常FF出力16)
+      → パルス符号化FF(24→2, tanh) → Step → 2bits
 
-    GAが進化させる重み:
-      W3, b3 (12×10, 10)
-      バッファGRU重み 9行列
-      記憶GRU重み 9行列
-      γ (6,) ← 記憶GRU上位6次元の初期値
-      W_bypass, b_bypass (5×8, 8)
-      W1, b1 (20×10, 10)
-      W_encode, b_encode (10×2, 2)
+    GAが進化させる重み: 2,622次元
     """
 
     def __init__(self, rng: np.random.Generator | None = None):
@@ -81,38 +74,38 @@ class SensoryNN:
             rng = np.random.default_rng()
         s = 0.3
 
-        # 第三層FF: 12→10
+        # 第三層FF: 12→24
         self.W3 = rng.normal(0, s, (L3_OUT_DIM, SENSORY_INPUT_DIM))
         self.b3 = np.zeros(L3_OUT_DIM)
 
-        # バッファGRU: 5→5
+        # バッファGRU: 12→5
         id_b, hd_b = L3_BUFFER_DIM, BUF_GRU_DIM
         self.Wz_b = rng.normal(0, s, (hd_b, id_b)); self.Uz_b = rng.normal(0, s, (hd_b, hd_b)); self.bz_b = np.zeros(hd_b)
         self.Wr_b = rng.normal(0, s, (hd_b, id_b)); self.Ur_b = rng.normal(0, s, (hd_b, hd_b)); self.br_b = np.zeros(hd_b)
         self.Wh_b = rng.normal(0, s, (hd_b, id_b)); self.Uh_b = rng.normal(0, s, (hd_b, hd_b)); self.bh_b = np.zeros(hd_b)
 
-        # 記憶GRU: 10→12 (入力=通常ノード5 + buf_out5)
+        # 記憶GRU: 17→12 (入力=通常ノード12 + buf_out5)
         id_m, hd_m = L3_NORMAL_DIM + BUF_GRU_DIM, MEM_GRU_DIM
         self.Wz_m = rng.normal(0, s, (hd_m, id_m)); self.Uz_m = rng.normal(0, s, (hd_m, hd_m)); self.bz_m = np.zeros(hd_m)
         self.Wr_m = rng.normal(0, s, (hd_m, id_m)); self.Ur_m = rng.normal(0, s, (hd_m, hd_m)); self.br_m = np.zeros(hd_m)
         self.Wh_m = rng.normal(0, s, (hd_m, id_m)); self.Uh_m = rng.normal(0, s, (hd_m, hd_m)); self.bh_m = np.zeros(hd_m)
 
-        # γ: 記憶GRU上位6次元の初期値（GAが進化させる）
+        # γ: 記憶GRU上位6次元の初期値
         self.gamma = np.zeros(GRU_INHERIT_DIM)
 
-        # 通常FF: 5→8
+        # 通常FF: 12→16
         self.W_bypass = rng.normal(0, s, (BYPASS_FF_DIM, L3_NORMAL_DIM))
         self.b_bypass = np.zeros(BYPASS_FF_DIM)
 
-        # 第一層FF（統合）: 20→10
+        # 第一層FF（統合）: 28→24
         self.W1 = rng.normal(0, s, (L1_OUT_DIM, L1_IN_DIM))
         self.b1 = np.zeros(L1_OUT_DIM)
 
-        # パルス符号化FF: 10→2
+        # パルス符号化FF: 24→2
         self.W_encode = rng.normal(0, s, (SENSORY_ENCODE_DIM, L1_OUT_DIM))
         self.b_encode = np.zeros(SENSORY_ENCODE_DIM)
 
-        # オンライン状態（エピソード内のみ）
+        # オンライン状態
         self._h_mem: np.ndarray = self._init_h_mem()
         self._h_buf: np.ndarray = np.zeros(BUF_GRU_DIM)
         self._buf_out: np.ndarray = np.zeros(BUF_GRU_DIM)
@@ -120,7 +113,7 @@ class SensoryNN:
         # アクティベーション記録（可視化用）
         self.last_l3_act:      list[float] = [0.0] * L3_OUT_DIM
         self.last_buf_act:     list[float] = [0.0] * BUF_GRU_DIM
-        self.last_buf_active:  bool = False   # パルス受信フレームかどうか
+        self.last_buf_active:  bool = False
         self.last_gru_act:     list[float] = [0.0] * MEM_GRU_DIM
         self.last_bypass_act:  list[float] = [0.0] * BYPASS_FF_DIM
         self.last_integ_act:   list[float] = [0.0] * L1_OUT_DIM
@@ -128,17 +121,15 @@ class SensoryNN:
         # 互換性用エイリアス
         self.last_input_act  = self.last_l3_act
         self.last_cortex_act = self.last_l3_act
-        self.last_integ_act  = self.last_integ_act
 
     def _init_h_mem(self) -> np.ndarray:
-        """記憶GRUの初期隠れ状態: 上位6=γ、下位6=ゼロ"""
         h = np.zeros(MEM_GRU_DIM)
         h[:GRU_INHERIT_DIM] = self.gamma
         return h
 
     def reset(self):
-        self._h_mem  = self._init_h_mem()
-        self._h_buf  = np.zeros(BUF_GRU_DIM)
+        self._h_mem   = self._init_h_mem()
+        self._h_buf   = np.zeros(BUF_GRU_DIM)
         self._buf_out = np.zeros(BUF_GRU_DIM)
 
     def forward(self, obs: list[float], is_pulse_frame: bool = False) -> list[int]:
@@ -147,8 +138,8 @@ class SensoryNN:
         # 第三層FF
         x3 = np.tanh(self.W3 @ x + self.b3)
         self.last_l3_act = x3.tolist()
-        x3_normal = x3[:L3_NORMAL_DIM]   # [0:5]
-        x3_buffer = x3[L3_NORMAL_DIM:]   # [5:10]
+        x3_normal = x3[:L3_NORMAL_DIM]    # [0:12]
+        x3_buffer = x3[L3_NORMAL_DIM:]    # [12:24]
 
         # バッファGRU（パルス受信フレームのみ更新）
         if is_pulse_frame:
@@ -162,7 +153,7 @@ class SensoryNN:
         self.last_buf_act    = self._buf_out.tolist()
         self.last_buf_active = is_pulse_frame
 
-        # 記憶GRU: 入力=concat(通常ノード[0:5], buf_out[0:5])
+        # 記憶GRU: 入力=concat(通常ノード[0:12], buf_out[0:5])
         x_mem_in = np.concatenate([x3_normal, self._buf_out])
         self._h_mem = gru_step(
             x_mem_in, self._h_mem,
@@ -172,7 +163,7 @@ class SensoryNN:
         )
         self.last_gru_act = self._h_mem.tolist()
 
-        # 通常FF（バッファの影響なし）
+        # 通常FF
         bypass = np.tanh(self.W_bypass @ x3_normal + self.b_bypass)
         self.last_bypass_act = bypass.tolist()
 
@@ -257,27 +248,20 @@ class SensoryNN:
 # ================================================================
 class MotorNN:
     """
-    運動NN。2bitsパルス → [Accel, Steer, Brake]。
+    運動NN。2bitsパルス → [Accel, Steer, Brake]。v2仕様。
     センサリーNNと対称構造。
 
     pulse(2)
-      → 第三層FF(2→10, tanh)
-          通常ノード[0:5] → 記憶GRU入力 + 通常FF入力
-          バッファノード[5:10] → バッファGRU入力（パルス受信時のみ更新）
-      → バッファGRU(5→5) ← パルス受信フレームのみ更新
-      → 記憶GRU(10→12) ← 入力=concat(通常ノード[0:5], buf_out[0:5])
-      → 通常FF(5→8, tanh)
-      → 第一層FF(20→10, tanh)
-      → 出力FF(10→3, sigmoid) → Accel/Steer/Brake
+      → 第三層FF(2→24, tanh)
+          通常ノード[0:12] → 記憶GRU入力 + 通常FF入力
+          バッファノード[12:24] → バッファGRU入力（パルス受信時のみ更新）
+      → バッファGRU(12→5) ← パルス受信フレームのみ更新
+      → 記憶GRU(17→12) ← 入力=concat(通常ノード[0:12], buf_out[0:5])
+      → 通常FF(12→16, tanh)
+      → 第一層FF(28→24, tanh)
+      → 出力FF(24→3, sigmoid) → Accel/Steer/Brake
 
-    GAが進化させる重み:
-      W3, b3 (2×10, 10)
-      バッファGRU重み 9行列
-      記憶GRU重み 9行列
-      γ (6,)
-      W_bypass, b_bypass (5×8, 8)
-      W1, b1 (20×10, 10)
-      W_out, b_out (10×3, 3)
+    GAが進化させる重み: 2,407次元
     """
 
     def __init__(self, rng: np.random.Generator | None = None):
@@ -285,34 +269,34 @@ class MotorNN:
             rng = np.random.default_rng()
         s = 0.3
 
-        # 第三層FF: 2→10
+        # 第三層FF: 2→24
         self.W3 = rng.normal(0, s, (L3_OUT_DIM, BN_PARAMS))
         self.b3 = np.zeros(L3_OUT_DIM)
 
-        # バッファGRU: 5→5（センサリーと同仕様）
+        # バッファGRU: 12→5
         id_b, hd_b = L3_BUFFER_DIM, BUF_GRU_DIM
         self.Wz_b = rng.normal(0, s, (hd_b, id_b)); self.Uz_b = rng.normal(0, s, (hd_b, hd_b)); self.bz_b = np.zeros(hd_b)
         self.Wr_b = rng.normal(0, s, (hd_b, id_b)); self.Ur_b = rng.normal(0, s, (hd_b, hd_b)); self.br_b = np.zeros(hd_b)
         self.Wh_b = rng.normal(0, s, (hd_b, id_b)); self.Uh_b = rng.normal(0, s, (hd_b, hd_b)); self.bh_b = np.zeros(hd_b)
 
-        # 記憶GRU: 10→12（センサリーと同仕様）
+        # 記憶GRU: 17→12
         id_m, hd_m = L3_NORMAL_DIM + BUF_GRU_DIM, MEM_GRU_DIM
         self.Wz_m = rng.normal(0, s, (hd_m, id_m)); self.Uz_m = rng.normal(0, s, (hd_m, hd_m)); self.bz_m = np.zeros(hd_m)
         self.Wr_m = rng.normal(0, s, (hd_m, id_m)); self.Ur_m = rng.normal(0, s, (hd_m, hd_m)); self.br_m = np.zeros(hd_m)
         self.Wh_m = rng.normal(0, s, (hd_m, id_m)); self.Uh_m = rng.normal(0, s, (hd_m, hd_m)); self.bh_m = np.zeros(hd_m)
 
-        # γ: 記憶GRU上位6次元の初期値
+        # γ
         self.gamma = np.zeros(GRU_INHERIT_DIM)
 
-        # 通常FF: 5→8
+        # 通常FF: 12→16
         self.W_bypass = rng.normal(0, s, (BYPASS_FF_DIM, L3_NORMAL_DIM))
         self.b_bypass = np.zeros(BYPASS_FF_DIM)
 
-        # 第一層FF（統合）: 20→10
+        # 第一層FF（統合）: 28→24
         self.W1 = rng.normal(0, s, (L1_OUT_DIM, L1_IN_DIM))
         self.b1 = np.zeros(L1_OUT_DIM)
 
-        # 出力FF: 10→3
+        # 出力FF: 24→3
         self.W_out = rng.normal(0, s, (MOTOR_OUTPUT_DIM, L1_OUT_DIM))
         self.b_out = np.zeros(MOTOR_OUTPUT_DIM)
 
@@ -321,7 +305,7 @@ class MotorNN:
         self._h_buf: np.ndarray = np.zeros(BUF_GRU_DIM)
         self._buf_out: np.ndarray = np.zeros(BUF_GRU_DIM)
 
-        # アクティベーション記録（可視化用）
+        # アクティベーション記録
         self.last_l3_act:      list[float] = [0.0] * L3_OUT_DIM
         self.last_buf_act:     list[float] = [0.0] * BUF_GRU_DIM
         self.last_buf_active:  bool = False
@@ -352,7 +336,7 @@ class MotorNN:
         x3_normal = x3[:L3_NORMAL_DIM]
         x3_buffer = x3[L3_NORMAL_DIM:]
 
-        # バッファGRU（パルス受信フレームのみ更新）
+        # バッファGRU
         if is_pulse_frame:
             self._h_buf = gru_step(
                 x3_buffer, self._h_buf,
@@ -482,14 +466,13 @@ class RNNBottleneck:
         self.last_motor_gru:   list[float] = [0.0] * MEM_GRU_DIM
         self.last_output:      list[float] = [0.5, 0.5, 0.0]
 
-        # 表示・音声専用（実際の消化パイプラインとは独立）
+        # 表示・音声専用
         self._display_queue:   list[list[int]] = []
         self._display_history: list[list[int]] = []
         self._display_phoneme: str = ""
         self._display_frame:   int = 0
 
     def reset(self, prefill: bool = True):
-        """エピソードをリセットする。prefill=Trueで感覚層を1ターン先行起動。"""
         self._frame         = 0
         self._turn          = 0
         self._pulse_buffer  = []
@@ -519,14 +502,12 @@ class RNNBottleneck:
     def step(self, obs: list[float]) -> list[float]:
         f = self._frame
 
-        # パルス生成（12フレームに1回）
         is_gen_frame = (f % self.PULSE_GEN_INTERVAL == 0)
         if is_gen_frame:
             pulse = self.sensory.forward(obs, is_pulse_frame=True)
             self._outgoing.append(pulse)
             self.last_sensory_gru = self.sensory.last_gru_act
 
-        # ターン境界（240フレーム）
         if f > 0 and f % TURN_FRAMES == 0:
             self._pulse_buffer.extend(self._outgoing)
             self._display_queue   = [p[:] for p in self._outgoing]
@@ -537,7 +518,6 @@ class RNNBottleneck:
             self._consume_count = 0
             self._mode = "speak" if self._mode == "listen" else "listen"
 
-        # 表示専用タイマー: 5Hz（12フレームに1個）
         if self._display_queue and self._display_frame % self.DISPLAY_INTERVAL == 0:
             disp_pulse = self._display_queue.pop(0)
             self._display_history.append(disp_pulse)
@@ -554,7 +534,6 @@ class RNNBottleneck:
                     pass
         self._display_frame += 1
 
-        # パルス消化（24フレームに1個・半速）
         is_consume_frame = (f % PULSE_CONSUME_RATE == 0 and bool(self._pulse_buffer))
         if is_consume_frame:
             pulse = self._pulse_buffer.pop(0)
@@ -573,7 +552,6 @@ class RNNBottleneck:
             self.last_motor_gru = self.motor.last_gru_act
             self.last_output    = self.motor.last_output_act
         else:
-            # 非消化フレームでも記憶GRUを更新（バッファ凍結）
             if self._current_pulse:
                 self.motor.forward(self._current_pulse, is_pulse_frame=False)
                 self.last_motor_gru = self.motor.last_gru_act
@@ -583,7 +561,6 @@ class RNNBottleneck:
         return self._last_action
 
     def on_pulse_emit(self, bits2: int) -> None:
-        """後方互換性のため維持。音声は表示タイマー側で出力。"""
         from config import PHONEME_TABLE
         self._last_phoneme = PHONEME_TABLE.get(bits2 & 0x3, "")
 

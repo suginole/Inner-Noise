@@ -73,17 +73,17 @@ PIPELINE_OFFSET    = 120      # 半ターンずれ（10パルス分）
 # ---- RNNボトルネックアーキテクチャ（バッファGRU挿入型・対称構造） ----
 SENSORY_INPUT_DIM  = 6 + VISION_RAYS + 1  # = 12（obsベクトル全次元）
 
-# 共通アーキテクチャ定数（センサリー/モーター共通）
-L3_OUT_DIM         = 10       # 第三層FF出力次元（10）
-L3_NORMAL_DIM      = 5        # 第三層通常ノード（5）
-L3_BUFFER_DIM      = 5        # 第三層バッファノード（5）
+# 共通アーキテクチャ定数（センサリー/モーター共通）v2仕様
+L3_OUT_DIM         = 24       # 第三層FF出力次元（24）
+L3_NORMAL_DIM      = 12       # 第三層通常ノード（12）
+L3_BUFFER_DIM      = 12       # 第三層バッファノード（12）
 BUF_GRU_DIM        = 5        # バッファGRU隠れ次元（5）
 MEM_GRU_DIM        = 12       # 記憶GRU隠れ次元（12）
-GRU_INHERIT_DIM    = 6        # GRU継承領域（上佖6次元）
-GRU_EPISODE_DIM    = 6        # GRU非継承領域（下佖6次元）
-BYPASS_FF_DIM      = 8        # 通常FF出力次元（8）
-L1_IN_DIM          = MEM_GRU_DIM + BYPASS_FF_DIM  # = 20
-L1_OUT_DIM         = 10       # 第一層FF（統合層）出力次元（10）
+GRU_INHERIT_DIM    = 6        # GRU継承領域（上位6次元）
+GRU_EPISODE_DIM    = 6        # GRU非継承領域（下位6次元）
+BYPASS_FF_DIM      = 16       # 通常FF出力次元（16）
+L1_IN_DIM          = MEM_GRU_DIM + BYPASS_FF_DIM  # = 28
+L1_OUT_DIM         = 24       # 第一層FF（統合層）出力次元（24）
 SENSORY_ENCODE_DIM = 2        # パルス符号化FF出力（2bits）
 MOTOR_OUTPUT_DIM   = 3        # 出力FF（Accel/Steer/Brake）
 
