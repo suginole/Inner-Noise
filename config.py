@@ -91,7 +91,7 @@ PENALTY_FALL       = -10.0
 COMPLEXITY_ALPHA   = 0.1      # NEATノード/エッジペナルティ係数
 
 # ---- GA ----
-GA_POP_SIZE        = 500      # 個体数
+GA_POP_SIZE        = 50       # 個体数
 GA_ELITE           = 20       # エリート個体数
 GA_MUTATION_RATE   = 0.15
 GA_MUTATION_STD    = 0.3

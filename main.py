@@ -121,6 +121,10 @@ class Game:
         for genome in self.ga.population:
             car = Car(*self.field.start_pos)
             agent = GAAgent(car, self.field, genome)
+            # 音声が有効なら全エージェントのbnにコンバーターを属成
+            if self.audio_bn.audio_enabled and hasattr(agent, 'bn'):
+                agent.bn.audio_enabled = True
+                agent.bn.converter     = self.audio_bn.converter
             self.ga_agents.append(agent)
 
     # ----------------------------------------------------------------
@@ -480,7 +484,15 @@ class Game:
                     self._do_save(auto=False)
                 elif event.key == pygame.K_v:
                     # 音声ON/OFF切替
-                    self.audio_bn.toggle_audio()
+                    new_state = self.audio_bn.toggle_audio()
+                    # 全エージェントのRNNBottleneckにも反映
+                    for ag in self.ga_agents:
+                        if hasattr(ag, 'bn'):
+                            if new_state:
+                                ag.bn.audio_enabled = True
+                                ag.bn.converter     = self.audio_bn.converter
+                            else:
+                                ag.bn.audio_enabled = False
                 elif event.key == pygame.K_TAB:
                     if self.ga is None:
                         self.init_ga_mode(pop_size=self.fast_cfg_pop_size)
@@ -548,8 +560,15 @@ class Game:
         if not self.ga_running:
             return
         self._step_ga_once()
-        # 音声ボトルネックをティック（パルス発火・音声出力）
-        self.audio_bn.tick(dt)
+        # 音声出力: 最優秀エージェントのRNNBottleneckがパルス消化時に鳴らす
+        # audio_bn（ダミー）は使わない
+        alive_agents = [ag for ag in self.ga_agents if ag.car.alive]
+        if alive_agents:
+            best_ag = max(alive_agents, key=lambda ag: ag.total_reward)
+            if self.audio_bn.audio_enabled and hasattr(best_ag, 'bn'):
+                # 最優秀エージェントのbnに音声を属成
+                best_ag.bn.audio_enabled = True
+                best_ag.bn.converter     = self.audio_bn.converter
 
     # ----------------------------------------------------------------
     def _get_camera_focus(self) -> pygame.Vector2:
