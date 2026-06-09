@@ -352,7 +352,15 @@ class RNNBottleneck:
         self.last_motor_gru:   list[float] = [0.0] * MOTOR_GRU_DIM
         self.last_output:      list[float] = [0.5, 0.5, 0.0]
 
-    def reset(self):
+    def reset(self, prefill: bool = True):
+        """エピソードをリセットする。
+
+        prefill=True（デフォルト）の場合、感覚層をダミー入力で
+        1ターン分（PULSE_TOTAL回）先行起動し、生成したパルスを
+        運動NNのパルスバッファに事前充填する。
+        これにより「最初の4秒だけγ頃り」問題を解消し、
+        全ターンで同じパイプライン動作に統一する。
+        """
         self._frame         = 0
         self._turn          = 0
         self._pulse_buffer  = []
@@ -364,6 +372,21 @@ class RNNBottleneck:
         self._last_action   = [0.0, 0.5, 0.0]
         self.sensory.reset()
         self.motor.reset()
+
+        if prefill:
+            # 感覚層をダミー入力でPULSE_TOTAL回先行起動し、
+            # 生成したパルスを運動NNのパルスバッファに事前充填する。
+            # ダミー入力: 全要素を中立値(0.5)に設定した初期状態を表現
+            from config import SENSORY_INPUT_DIM, PULSE_TOTAL
+            dummy_obs = [0.5] * SENSORY_INPUT_DIM
+            pre_pulses = []
+            for _ in range(PULSE_TOTAL):
+                pulse = self.sensory.forward(dummy_obs)
+                pre_pulses.append(pulse[:])
+            # 運動NNのパルスバッファに事前充填
+            self._pulse_buffer = pre_pulses
+            # 感覚層の隠れ状態は先行起動後の状態を維持（リセット不要）
+            # ターンカウンタは0のまま（正規パイプラインのターン、1から始まる）
 
     def step(self, obs: list[float]) -> list[float]:
         f = self._frame
@@ -395,12 +418,8 @@ class RNNBottleneck:
             self._last_action = action
             self.last_motor_gru = self.motor.last_gru_act
             self.last_output    = self.motor.last_output_act
-
-        elif self._turn == 0:
-            action = self.motor.forward([0, 0])
-            self._last_action = action
-            self.last_motor_gru = self.motor.last_gru_act
-            self.last_output    = self.motor.last_output_act
+        # 注意: プリフィルにより_pulse_bufferは常に初期充填済みのため、
+        # 旧実装の「ターン1のみデフォルト行動」フォールバックは不要
 
         self._frame += 1
         return self._last_action

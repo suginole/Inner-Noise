@@ -915,6 +915,11 @@ class Renderer:
             self._draw_edges(gru_acts,    sy_gru,    col_gru,    node_r,
                              integ_acts,  sy_integ,  col_integ,  node_r,
                              getattr(sensory_nn, 'W_integ', None))
+            # パルス符号化FF層へのエッジ（統合FF → 2bitパルス）
+            self._draw_edges(integ_acts,  sy_integ,  col_integ,  node_r,
+                             pulse_acts,  sy_pulse,  col_pulse,  node_r,
+                             getattr(sensory_nn, 'W_encode', None),
+                             node_gap_b=26)
 
         # 凡例・列ラベル
         leg = self.font_s.render("赤=+ 暗=0 青=-", True, (80, 100, 160))
@@ -943,7 +948,14 @@ class Renderer:
         hist   = bottleneck.get_pulse_history()  if hasattr(bottleneck, 'get_pulse_history')  else []
         mode   = bottleneck.get_mode()            if hasattr(bottleneck, 'get_mode')            else 'listen'
         prog   = bottleneck.get_turn_progress()   if hasattr(bottleneck, 'get_turn_progress')   else 0.0
-        phoneme = bottleneck.get_last_phoneme()   if hasattr(bottleneck, 'get_last_phoneme')    else ''
+
+        # 音素文字は常にメーターの最新スロット（右端）から導出する
+        if hist:
+            latest_pulse = hist[-1]
+            latest_bits2 = (latest_pulse[0] << 1) | latest_pulse[1]
+        else:
+            latest_bits2 = (pulse[0] << 1) | pulse[1]
+        phoneme = PHONEME_TABLE.get(latest_bits2 & 0x3, "")
 
         # 上段: S→M（傾聴ターン）
         uy = y + 18
@@ -987,18 +999,23 @@ class Renderer:
                 pt = self.font_m.render(f"「{phoneme}」", True, (255, 220, 100))
                 self.screen.blit(pt, (x + 90, ly + 22))
 
-        # パルス履歴グリッド（下部）
+        # パルス履歴グリッド（20スロット固定・下部）
+        # 1ターン=20パルスに合わせて横幅20スロットに統一
+        HIST_SLOTS = 20
+        slot_w = max(8, (w - 12) // HIST_SLOTS)
         hy = y + h - 28
-        for hi, hp in enumerate(hist[-16:]):
+        # 左から順次追加、右端が最新スロット
+        padded_hist = hist[-HIST_SLOTS:]  # 最新HIST_SLOTS分を取得
+        for hi, hp in enumerate(padded_hist):
             for bi, bit in enumerate(hp[:2]):
-                bx = x + 6 + hi * 16
+                bx = x + 6 + hi * slot_w
                 by = hy + bi * 10
                 c = C_PULSE_ON if bit else C_PULSE_OFF
-                pygame.draw.rect(self.screen, c, (bx, by, 12, 8))
+                pygame.draw.rect(self.screen, c, (bx, by, slot_w - 2, 8))
 
     def _draw_motor_panel(self, genome, x, y, w, h):
         """右パネル: MOTOR NN（赤系）
-        4列: 埋め込みFF(16) / 運動GRU(16) / 運動皮質FF(12) / OUTPUT(3)
+        6列: 2bitバス(2) / 埋め辽FF(16) / 運動GRU(16) / 統合FF(16) / 運動皮質FF(12) / OUTPUT(3)
         """
         bg = pygame.Surface((w, h), pygame.SRCALPHA)
         bg.fill((30, 5, 5, 220))
@@ -1008,6 +1025,7 @@ class Renderer:
         title = self.font_s.render("MOTOR NN", True, (255, 100, 100))
         self.screen.blit(title, (x + 6, y + 4))
 
+        pulse_acts  = getattr(genome, 'last_pulse_act',        [0, 0])  # 2bitバス
         embed_acts  = getattr(genome, 'last_embed_act',        [0.0] * 16)
         gru_acts    = getattr(genome, 'last_motor_gru',        [0.0] * 16)
         integ_acts  = getattr(genome, 'last_motor_integ',      [0.0] * 16)  # 統合FF
@@ -1018,12 +1036,13 @@ class Renderer:
         node_r   = 3
         node_gap = 12
         row_top  = y + 18
-        # 5列の水平位置
-        col_embed  = x + 16
-        col_gru    = x + int(w * 0.26)
-        col_integ  = x + int(w * 0.46)
-        col_cortex = x + int(w * 0.64)
-        col_out    = x + int(w * 0.80)
+        # 6列の水平位置（2bitバス列を左端に追加）
+        col_bus    = x + 12           # 2bit入力バス
+        col_embed  = x + int(w * 0.22)
+        col_gru    = x + int(w * 0.38)
+        col_integ  = x + int(w * 0.54)
+        col_cortex = x + int(w * 0.70)
+        col_out    = x + int(w * 0.84)
         bar_w      = w - (col_out - x) - 6
 
         def _bipolar_color(v):
@@ -1043,6 +1062,17 @@ class Renderer:
                 pygame.draw.circle(self.screen, c, (cx, ny), node_r)
                 pygame.draw.circle(self.screen, border_c, (cx, ny), node_r, 1)
             return sy, n
+
+        # 2bitバス入力列を描画
+        n_pulse = len(pulse_acts)
+        sy_pulse = row_top + max(0, (h - 28 - n_pulse * 26) // 2)
+        for i, bit in enumerate(pulse_acts):
+            ny = sy_pulse + i * 26
+            c = C_PULSE_ON if bit else C_PULSE_OFF
+            pygame.draw.rect(self.screen, c, (col_bus - 9, ny, 16, 18))
+            pygame.draw.rect(self.screen, C_GRAY, (col_bus - 9, ny, 16, 18), 1)
+            bt = self.font_s.render(str(bit), True, C_WHITE if bit else C_GRAY)
+            self.screen.blit(bt, (col_bus - 9 + 8 - bt.get_width()//2, ny + 3))
 
         sy_embed,  n_embed  = _draw_col(embed_acts,  col_embed)
 
@@ -1079,6 +1109,11 @@ class Renderer:
         # 層間エッジ（上位8本）
         motor_nn = getattr(genome, 'motor', None)
         if motor_nn is not None:
+            # 2bitバス → 埋め辽FFへのエッジ
+            self._draw_edges(pulse_acts,  sy_pulse,  col_bus,    node_r,
+                             embed_acts,  sy_embed,  col_embed,  node_r,
+                             getattr(motor_nn, 'W_embed', None),
+                             node_gap_a=26)
             self._draw_edges(embed_acts,  sy_embed,  col_embed,  node_r,
                              gru_acts,    sy_gru,    col_gru,    node_r,
                              getattr(motor_nn, 'Wh', None))
@@ -1097,6 +1132,7 @@ class Renderer:
         leg = self.font_s.render("赤=+ 暗=0 青=-", True, (160, 80, 80))
         self.screen.blit(leg, (x + 4, y + h - 14))
         for lbl, lx, lc in [
+            ("BUS",  col_bus,    (200, 160, 60)),
             ("EMB",  col_embed,  (200, 80, 80)),
             ("GRU",  col_gru,    (210, 90, 90)),
             ("INT",  col_integ,  (215, 95, 95)),
@@ -1145,27 +1181,30 @@ class Renderer:
             pass
 
     def _draw_flow_arrows(self, x, y, panel_w, panel_h, gap, mode):
-        """パネル間の接続矢印。"""
+        """パネル間の接続矢印。
+        両矢印ともボトルネック側を向く（データが両側から送り込まれる視覚表現）。
+        SENSORY NN ─► BOTTLENECK ◄─ MOTOR NN
+        """
         import time
         flash = (int(time.time() * 5) % 2 == 0)   # 点滅
 
         mid_y = y + panel_h // 2
-        ax1 = x + panel_w
-        ax2 = ax1 + gap
-        ax3 = ax2 + panel_w
-        ax4 = ax3 + gap
+        ax1 = x + panel_w          # SENSORY右端
+        ax2 = ax1 + gap            # BOTTLENECK左端
+        ax3 = ax2 + panel_w        # BOTTLENECK右端
+        ax4 = ax3 + gap            # MOTOR左端
 
-        # 左矢印（S→M: 傾聴ターン中は青く点滅）
+        # 左矢印（SENSORY → BOTTLENECK）: 矢印は右向き（ボトルネック側）
         c1 = (100, 160, 255) if (mode == 'listen' and flash) else (50, 60, 80)
         pygame.draw.line(self.screen, c1, (ax1, mid_y), (ax2, mid_y), 2)
         pygame.draw.polygon(self.screen, c1, [
-            (ax2, mid_y), (ax2 - 5, mid_y - 4), (ax2 - 5, mid_y + 4)])
+            (ax2, mid_y), (ax2 - 5, mid_y - 4), (ax2 - 5, mid_y + 4)])  # 右向き
 
-        # 右矢印（M→S: 発話ターン中は赤く点滅）
+        # 右矢印（MOTOR → BOTTLENECK）: 矢印は左向き（ボトルネック側）
         c2 = (100, 200, 120) if (mode == 'speak' and flash) else (50, 80, 50)
-        pygame.draw.line(self.screen, c2, (ax3, mid_y), (ax4, mid_y), 2)
+        pygame.draw.line(self.screen, c2, (ax4, mid_y), (ax3, mid_y), 2)
         pygame.draw.polygon(self.screen, c2, [
-            (ax4, mid_y), (ax4 - 5, mid_y - 4), (ax4 - 5, mid_y + 4)])
+            (ax3, mid_y), (ax3 + 5, mid_y - 4), (ax3 + 5, mid_y + 4)])  # 左向き
 
     # ================================================================
     def draw_overlay(self, text: str, color=C_WHITE):
