@@ -661,10 +661,10 @@ class Game:
                     self.save_toast_timer = FPS * 3
                     self.state = GameState.GA
                 elif event.key == pygame.K_3:
-                    # 高速モードで再開
+                    # 高速モード設定画面へ（エージェント数・ゴール数を再設定できる）
                     self.save_toast_msg   = f"ロード完了  Gen {self.ga.generation}  ID={self.load_resume_meta['id']}"
                     self.save_toast_timer = FPS * 3
-                    self.state = GameState.GA_FAST
+                    self.state = GameState.GA_FAST_CFG
 
             elif self.state == GameState.GA_FAST_CFG:
                 self._handle_fast_cfg_key(event.key)
@@ -704,8 +704,20 @@ class Game:
         """高速モード設定画面のキー操作。"""
         if key == pygame.K_RETURN or key == pygame.K_SPACE:
             # 設定確定 → 高速モード開始（fast_mode=TrueでGPU対応）
-            self.init_ga_mode(pop_size=self.fast_cfg_pop_size,
-                              fast_mode=True)
+            if self.load_resume_meta is not None and self.ga is not None:
+                # ロード済みモデルを引き継いで高速モードを初期化
+                saved_ga = self.ga
+                saved_gen = self.ga.generation
+                self.init_ga_mode(pop_size=self.fast_cfg_pop_size,
+                                  fast_mode=True)
+                # ロード済み重みを新しい個体群に転送
+                save_manager.load_model(self.load_resume_meta['id'], self.ga)
+                self._spawn_agents()
+                self.loaded_from_gen = self.ga.generation
+                self.load_resume_meta = None   # 一度使ったらクリア
+            else:
+                self.init_ga_mode(pop_size=self.fast_cfg_pop_size,
+                                  fast_mode=True)
             self.state = GameState.GA_FAST
             return
         if key == pygame.K_ESCAPE or key == pygame.K_m:
@@ -1121,8 +1133,8 @@ class Game:
         pygame.draw.rect(self.screen, (100, 180, 255), (bx, by, bw, bh), 2, border_radius=10)
 
         btn_items = [
-            ("[2]  監視モードで再開",   (50, 220, 150)),
-            ("[3]  高速学習モードで再開", (255, 200, 50)),
+            ("[2]  監視モードで再開",             (50, 220, 150)),
+            ("[3]  高速モード設定画面へ", (255, 200, 50)),
         ]
         for i, (label, color) in enumerate(btn_items):
             t = font_m.render(label, True, color)
