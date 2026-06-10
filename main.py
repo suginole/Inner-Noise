@@ -150,7 +150,11 @@ class Game:
         self.field        = Field(terrain_seed=42, food_episode=0)
         self.player_car   = Car(*self.field.start_pos)
         self.player_agent = PlayerAgent(self.player_car, self.field)
-        self.player_bn    = Bottleneck()
+        from game.sage  import SageNN
+        from game.brute import BruteNN
+        import numpy as np
+        rng = np.random.default_rng(0)
+        self.player_bn = Bottleneck(SageNN(rng), BruteNN(rng))
         self.done_message = ""
 
     def init_ga_mode(self, pop_size: int | None = None):

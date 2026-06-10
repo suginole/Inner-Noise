@@ -60,7 +60,11 @@ measure("draw_minimap",
     lambda: renderer.draw_minimap(field, car.pos, field.goal_pos))
 
 # ---- HUD ----
-bn = Bottleneck()
+from game.sage  import SageNN
+from game.brute import BruteNN
+import numpy as np
+_rng = np.random.default_rng(0)
+bn = Bottleneck(SageNN(_rng), BruteNN(_rng))
 measure("draw_hud_player",
     lambda: renderer.draw_hud_player(car, bn))
 
