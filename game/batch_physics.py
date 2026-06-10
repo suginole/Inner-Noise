@@ -290,30 +290,38 @@ def collect_obs_batch(agents: list, field) -> tuple:
     goal_ang_norm = np.arctan2(np.sin(goal_ang_abs),
                                np.cos(goal_ang_abs)) / math.pi  # (alive,)
 
-    # ---- obs 配列への代入（alive_idx のループは弁別視野 enc のみ） ----
-    for ii, i in enumerate(alive_idx):
-        # 弁別視野 enc
-        enc = np.zeros(MUSHROOM_ENC_DIM, dtype=np.float32)
-        if fwd_mask[ii].any():
-            best_j = int(np.argmin(
-                np.where(fwd_mask[ii], dist_all[ii], np.inf)))
-            enc[mis_biome[best_j]] = 1.0
-            enc[3] = float(mis_premium[best_j])
-            enc[4] = float(mis_variant[best_j])
-            enc[5] = float(mis_rotten[best_j])
+    # ---- 弁別視野 enc を全alive 一括構築 ----
+    # best_j: (alive,)  -1 = キノコなし
+    best_j = np.where(
+        fwd_mask.any(axis=-1),
+        np.argmin(np.where(fwd_mask, dist_all, np.inf), axis=-1),
+        -1).astype(np.int32)
 
-        sage_enc       = enc.copy()
-        sage_enc[0:3]  = 0.0
-        sage_enc[5]    = 0.0
-        brute_enc      = enc.copy()
-        brute_enc[3]   = 0.0
-        brute_enc[4]   = 0.0
+    valid = best_j >= 0   # (alive,)
 
-        obs_sage[i, :6]          = sage_enc
-        obs_sage[i, 6]           = float(goal_ang_norm[ii])
-        obs_sage[i, 7]           = min(1.0, float(goal_dist[ii]) / FIELD_SIZE)
-        obs_sage[i, 8]           = energy[i] / MAX_ENERGY
-        obs_brute[i, :6]         = brute_enc
-        obs_brute[i, 6:6+n_rays] = rays_all[ii]
+    # enc 配列を一括構築 (alive, 6)
+    enc_all = np.zeros((na, MUSHROOM_ENC_DIM), dtype=np.float32)
+    if valid.any():
+        vj = best_j[valid]   # 有効キノコインデックス
+        enc_all[valid, mis_biome[vj]] = 1.0
+        enc_all[valid, 3] = mis_premium[vj].astype(np.float32)
+        enc_all[valid, 4] = mis_variant[vj]
+        enc_all[valid, 5] = mis_rotten[vj].astype(np.float32)
+
+    # SAGEマスク・ BRUTEマスクを一括適用
+    sage_enc_all          = enc_all.copy()
+    sage_enc_all[:, 0:3]  = 0.0
+    sage_enc_all[:, 5]    = 0.0
+    brute_enc_all         = enc_all.copy()
+    brute_enc_all[:, 3]   = 0.0
+    brute_enc_all[:, 4]   = 0.0
+
+    # ---- obs 配列へ一括代入（Python ループなし） ----
+    obs_sage[alive_idx, :6]          = sage_enc_all
+    obs_sage[alive_idx, 6]           = goal_ang_norm
+    obs_sage[alive_idx, 7]           = np.minimum(1.0, goal_dist / FIELD_SIZE)
+    obs_sage[alive_idx, 8]           = energy[alive_idx] / MAX_ENERGY
+    obs_brute[alive_idx, :6]         = brute_enc_all
+    obs_brute[alive_idx, 6:6+n_rays] = rays_all
 
     return obs_sage, obs_brute
