@@ -4,8 +4,11 @@ field.py — 地形生成・餌・ゴール管理
 設計方針:
   - 地形（hmap）は terrain_seed で完全固定。クラスレベルキャッシュにより
     同じシードなら何度インスタンス化しても再計算しない。
-  - 餌は food_episode（エピソード番号）ごとに FOOD_SEED ベースで再配置。
-    地形依存確率（谷バイアス）で出現し、山の上には高級餌が出現する。
+  - 餌はグリッドベース均一配置。food_episode（エピソード番号）ごとに
+    ジッターをかけて再配置する。
+  - 地形の高低に関わらず均等に分散（特定エリアへの偏りなし）。
+  - 高地（FOOD_MOUNTAIN_THRESH以上）に配置された餌は高級餌になる。
+  - 峰出口ボーナスエリアは撤去。
 """
 import math
 import random
@@ -65,7 +68,7 @@ class Field:
     """ワールド全体の地形・餌・ゴールを管理する。
 
     地形（hmap）は terrain_seed で完全固定。
-    餌はエピソードごとに food_episode で再配置される。
+    餌はグリッドベース均一配置（food_episodeごとにジッターで再配置）。
     foods の各要素は (Vector2, is_premium: bool) のタプル。
     """
 
@@ -88,7 +91,7 @@ class Field:
 
         self.hmap = Field._terrain_cache[terrain_seed]
 
-        # 峰の中心座標（峰出口報酬エリアの生成に使用）
+        # 峰の中心座標
         self.pass_pos: tuple[int, int] = Field._pass_cache[terrain_seed]
 
         # ---- スタート・ゴール位置（地形固定） ----
@@ -96,7 +99,6 @@ class Field:
         self.goal_pos  = (WORLD_W * 0.85, WORLD_H * 0.5)
 
         # ---- 餌の配置（エピソードごとに再配置） ----
-        # foods: list of (Vector2, is_premium)
         self.foods: list[tuple[pygame.Vector2, bool]] = []
         self._food_rng = random.Random(FOOD_SEED + food_episode)
         self._place_foods()
@@ -137,82 +139,64 @@ class Field:
 
     # ----------------------------------------------------------------
     def _place_foods(self):
-        """地形依存確率で餌を配置する。
-        - 谷（低地）: 通常餌が高確率で出現
-        - 山の上（FOOD_MOUNTAIN_THRESH以上）: 高級餌が出現
-        - 峰出口エリア（峰の左右 PASS_REWARD_RADIUS px内）: 超高級餌を集中配置
+        """グリッドベース均一配置で餌を配置する。
+
+        FOOD_GRID_SPACING 間隔のグリッド上に FOOD_JITTER のランダムジッターを
+        加えて配置する。地形の高低に関わらず均等に分散する。
+        高地（FOOD_MOUNTAIN_THRESH以上）に配置された餌は高級餌になる。
+        峰出口ボーナスエリアは撤去。
         """
         self.foods.clear()
-        placed   = 0
-        attempts = 0
-        rng      = self._food_rng
+        rng = self._food_rng
+        margin = 100
 
-        # ---- 峰出口エリアに超高級餌を集中配置 ----
-        # 峰の左側（スタート側）と右側（ゴール側）の出口仙近に集中
-        px, py = self.pass_pos
-        for side_dx in (-PASS_REWARD_RADIUS * 0.6, PASS_REWARD_RADIUS * 0.6):
-            for _ in range(PASS_REWARD_COUNT):
-                ox = rng.gauss(px + side_dx, PASS_REWARD_RADIUS * 0.3)
-                oy = rng.gauss(py, PASS_REWARD_RADIUS * 0.4)
-                ox = max(100, min(WORLD_W - 100, ox))
-                oy = max(100, min(WORLD_H - 100, oy))
-                self.foods.append((pygame.Vector2(ox, oy), True))
-                placed += 1
+        # グリッド点を生成
+        xs = list(range(margin, WORLD_W - margin, FOOD_GRID_SPACING))
+        ys = list(range(margin, WORLD_H - margin, FOOD_GRID_SPACING))
 
-        # ---- 通常配置 ----
-        while placed < FOOD_COUNT and attempts < FOOD_COUNT * 30:
-            attempts += 1
-            x = rng.uniform(100, WORLD_W - 100)
-            y = rng.uniform(100, WORLD_H - 100)
-            h = self.height_at(x, y)
+        # グリッド点にジッターを加えてシャッフル
+        candidates = []
+        for gx in xs:
+            for gy in ys:
+                jx = rng.uniform(-FOOD_JITTER, FOOD_JITTER)
+                jy = rng.uniform(-FOOD_JITTER, FOOD_JITTER)
+                cx = max(margin, min(WORLD_W - margin, gx + jx))
+                cy = max(margin, min(WORLD_H - margin, gy + jy))
+                candidates.append((cx, cy))
 
-            # 高級餌ゾーン（山の上）
-            if h >= FOOD_MOUNTAIN_THRESH:
-                if rng.random() < 0.4:
-                    self.foods.append((pygame.Vector2(x, y), True))
-                    placed += 1
-                continue
-
-            # 通常餌ゾーン（谷バイアス）
-            if h <= VALLEY_THRESHOLD:
-                prob = FOOD_VALLEY_BIAS
-            elif h >= MOUNTAIN_THRESHOLD:
-                prob = 0.05
-            else:
-                t    = (h - VALLEY_THRESHOLD) / (MOUNTAIN_THRESHOLD - VALLEY_THRESHOLD)
-                prob = FOOD_VALLEY_BIAS * (1.0 - t) + 0.05 * t
-
-            if rng.random() < prob:
-                self.foods.append((pygame.Vector2(x, y), False))
-                placed += 1
+        # シャッフルして上位FOOD_COUNT個を採用
+        rng.shuffle(candidates)
+        for cx, cy in candidates[:FOOD_COUNT]:
+            h = self.height_at(cx, cy)
+            is_premium = (h >= FOOD_MOUNTAIN_THRESH)
+            self.foods.append((pygame.Vector2(cx, cy), is_premium))
 
     def reset_foods(self, food_episode: int | None = None):
-        """餅をリセットして再配置する（エピソード開始時に呼ぶ）。"""
+        """餌をリセットして再配置する（エピソード開始時に呼ぶ）。"""
         if food_episode is not None:
             self.food_episode = food_episode
         self._food_rng = random.Random(FOOD_SEED + self.food_episode)
         self._place_foods()
 
     def clone_foods(self) -> 'Field':
-        """現在の餅配置をコピーした独立なFieldインスタンスを返す。
+        """現在の餌配置をコピーした独立なFieldインスタンスを返す。
 
         GA評価時に各エージェントに渡すことで、
-        他のエージェントの餅取得に影響されず独立した取得状況を保証する。
+        他のエージェントの餌取得に影響されず独立した取得状況を保証する。
         地形（hmap）・スタート・ゴール・峰座標は共有（変更なし）。
-        餅リストのみディープコピーする。
+        餌リストのみディープコピーする。
         """
-        import copy
         clone = Field.__new__(Field)
         # 地形・座標は元インスタンスと共有（読み取り専用なので安全）
         clone.terrain_seed = self.terrain_seed
         clone.food_episode = self.food_episode
-        clone.hmap         = self.hmap          # numpy配列は共有（変更なし）
+        clone.hmap         = self.hmap
         clone.pass_pos     = self.pass_pos
         clone.start_pos    = self.start_pos
         clone.goal_pos     = self.goal_pos
-        # 餅リストはディープコピー（各エージェントが独立に取得・削除できる）
+        # 餌リストはディープコピー（各エージェントが独立に取得・削除できる）
         clone.foods = [(pygame.Vector2(pos), is_p) for pos, is_p in self.foods]
-        # 餅補充用RNGは同じシードから再生成（補充順序が元と同じになる）
+        # 餌補充用RNGは同じシードから再生成（補充順序が元と同じになる）
         clone._food_rng = random.Random(FOOD_SEED + self.food_episode)
         return clone
 
@@ -249,42 +233,25 @@ class Field:
         return False, False
 
     def respawn_food(self):
-        """餌を1個補充する（地形依存確率）。"""
+        """餌を1個補充する（グリッドベースのランダム位置）。"""
         rng = self._food_rng
-        for _ in range(300):
-            x = rng.uniform(100, WORLD_W - 100)
-            y = rng.uniform(100, WORLD_H - 100)
+        margin = 100
+        for _ in range(50):
+            x = rng.uniform(margin, WORLD_W - margin)
+            y = rng.uniform(margin, WORLD_H - margin)
             h = self.height_at(x, y)
-
-            if h >= FOOD_MOUNTAIN_THRESH:
-                if rng.random() < 0.4:
-                    self.foods.append((pygame.Vector2(x, y), True))
-                    return
-                continue
-
-            if h <= VALLEY_THRESHOLD:
-                prob = FOOD_VALLEY_BIAS
-            elif h >= MOUNTAIN_THRESHOLD:
-                prob = 0.05
-            else:
-                t    = (h - VALLEY_THRESHOLD) / (MOUNTAIN_THRESHOLD - VALLEY_THRESHOLD)
-                prob = FOOD_VALLEY_BIAS * (1.0 - t) + 0.05 * t
-
-            if rng.random() < prob:
-                self.foods.append((pygame.Vector2(x, y), False))
-                return
+            is_premium = (h >= FOOD_MOUNTAIN_THRESH)
+            self.foods.append((pygame.Vector2(x, y), is_premium))
+            return
 
     # ----------------------------------------------------------------
     def get_surface(self) -> pygame.Surface:
-        """地形サーフェスを生成してキャッシュする（terrain_seedごとに1回のみ）。
-        内部では numpyでカラーマップを一括生成し、高速に Surface に転送する。
-        """
+        """地形サーフェスを生成してキャッシュする（terrain_seedごとに1回のみ）。"""
         if self.terrain_seed in Field._surface_cache:
             return Field._surface_cache[self.terrain_seed]
 
         import numpy as np
         rows, cols = self.hmap.shape
-        # numpyで全ピクセルのカラー配列を一括生成（ループ不要）
         rgb = np.zeros((rows, cols, 3), dtype=np.uint8)
         h = self.hmap
 

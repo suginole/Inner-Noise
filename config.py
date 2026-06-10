@@ -32,12 +32,13 @@ CAR_FALL_DAMAGE    = 0.20     # 急勾配落下時のエネルギーダメージ
 SLOPE_DAMAGE_THRESH= 0.45     # この勾配を超えると落下ダメージ
 
 # ---- エネルギー（空腹） ----
-ENERGY_MAX         = 1.0
+ENERGY_MAX         = 0.5      # 旧値(1.0)の半分（常に餅が逕迫した状態に）
+ENERGY_INIT        = 0.5      # 初期エネルギー = ENERGY_MAX
 ENERGY_DECAY_BASE  = 0.00150  # 毎フレームの基礎消費
-ENERGY_DECAY_CLIMB = 0.07000  # 登坂中の追加消費（勾配強度×この値）→ 旧値の1.75倍
+ENERGY_DECAY_CLIMB = 0.07000  # 登坂中の追加消費（勾配強度×この値）
 ENERGY_DECAY_IDLE  = 0.00300  # 停滞中の追加消費
-ENERGY_PER_FOOD    = 0.25     # 通常餌1個で回復するエネルギー
-ENERGY_PER_FOOD_HI = 0.55     # 高級餌（山の上）の回復量
+ENERGY_PER_FOOD    = 0.25     # 通常餅１個で回復するエネルギー
+ENERGY_PER_FOOD_HI = 0.55     # 高級餅（山の上）の回復量
 IDLE_SPEED_THRESH  = 0.3      # この速度以下を「停滞」とみなす
 
 # ---- 視野（感覚器官：餌探索） ----
@@ -46,14 +47,14 @@ VISION_RANGE       = WORLD_W / 10  # 視野距離 = マップ幅の1/10 = 400px
 VISION_RAYS        = 5        # 視野内のレイ数（観測ベクトルの次元に影響）
 FOCUS_RANGE        = 400.0    # 弁別視野（視線中央線上）の距離 (px)
 
-# ---- 餌 ----
-FOOD_COUNT         = 80       # フィールド上の餌の総数
+# ---- 餌（均一高密度配置） ----
+FOOD_COUNT         = 200      # フィールド上の餌の総数（旧値の約2.5倍）
 FOOD_RADIUS        = 12       # 餌の当たり判定半径 (px)
-FOOD_VALLEY_BIAS   = 0.85     # 谷に出現する確率
+FOOD_GRID_SPACING  = 200      # グリッド間隔 (px)—均一配置の基準
+FOOD_JITTER        = 80       # グリッド位置のランダムジッター (px)
 FOOD_MOUNTAIN_THRESH = MOUNTAIN_THRESHOLD + 0.1  # この高さ以上に高級餌が出現
 FOOD_SEED          = 12345    # 餌配置用の固定シード（地形と分離）
-PASS_REWARD_RADIUS = 300      # 峰出口報酬エリアの半径 (px)
-PASS_REWARD_COUNT  = 8        # 峰出口片側に配置する超高級餌の数
+# PASS_REWARD は撤去（峰ボーナスエリアは均一配置に包含される）
 
 # ---- ゴール ----
 GOAL_RADIUS        = 60       # ゴール判定半径 (px)

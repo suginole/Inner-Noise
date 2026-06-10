@@ -24,7 +24,7 @@ class Car:
         self.pos    = pygame.Vector2(x, y)
         self.angle  = angle          # 度（0=右向き）
         self.speed  = 0.0
-        self.energy = ENERGY_MAX
+        self.energy = ENERGY_INIT
         self.alive  = True
         self.food_collected = 0
         self.dist_to_goal   = 0.0
@@ -229,7 +229,7 @@ class Car:
         self.pos    = pygame.Vector2(x, y)
         self.angle  = angle
         self.speed  = 0.0
-        self.energy = ENERGY_MAX
+        self.energy = ENERGY_INIT
         self.alive  = True
         self.food_collected = 0
         self.dist_to_goal   = 0.0
