@@ -202,7 +202,7 @@ class BatchPhysics:
 # ================================================================
 def collect_obs_batch(agents: list, field) -> tuple:
     """
-    全エージェントの obs を一括収集する（numpy 一括・Python ループ最小化）。
+    全エージェントの obs を完全 numpy 一括計算で取得する。
 
     戻り値:
         obs_sage  (n, SAGE_OBS_DIM)  numpy float32
@@ -235,72 +235,85 @@ def collect_obs_batch(agents: list, field) -> tuple:
     # ゴール位置
     gx, gy = field.goal_pos
 
-    # 前方方向ベクトル（全エージェント一括）
-    rad = np.radians(angle)
-    fx  = np.cos(rad)   # (n,)
-    fy  = np.sin(rad)
-
     # 視覚レイ数（BRUTE_OBS_DIM - MUSHROOM_ENC_DIM - 2 = 3）
     n_rays = BRUTE_OBS_DIM - MUSHROOM_ENC_DIM - 2
 
-    alive_idx = np.where(alive)[0]
+    alive_idx = np.where(alive)[0]   # (alive,)
+    na = len(alive_idx)
+    if na == 0:
+        return obs_sage, obs_brute
 
-    for i in alive_idx:
-        # キノコとの距離・dot（一括）
-        dx   = mpos[:, 0] - pos_x[i]
-        dy   = mpos[:, 1] - pos_y[i]
-        dist = np.sqrt(dx * dx + dy * dy)
-        dot  = fx[i] * dx + fy[i] * dy
+    # alive 個体の位置・角度
+    ax = pos_x[alive_idx]   # (alive,)
+    ay = pos_y[alive_idx]
+    aa = angle[alive_idx]
 
-        # 弁別視野（前方最近傍キノコ）
-        mask = (dist < FOCUS_RANGE) & (dot > 0)
-        enc  = np.zeros(MUSHROOM_ENC_DIM, dtype=np.float32)
-        if mask.any():
-            best_i = int(np.argmin(np.where(mask, dist, np.inf)))
-            enc[mis_biome[best_i]] = 1.0
-            enc[3] = float(mis_premium[best_i])
-            enc[4] = float(mis_variant[best_i])
-            enc[5] = float(mis_rotten[best_i])
+    # 全alive × 全キノコ の差ベクトル (alive, mush)
+    dx_all = mpos[:, 0][np.newaxis, :] - ax[:, np.newaxis]   # (alive, mush)
+    dy_all = mpos[:, 1][np.newaxis, :] - ay[:, np.newaxis]
+    dist_all = np.sqrt(dx_all ** 2 + dy_all ** 2)             # (alive, mush)
 
-        # SAGE enc マスク（バイオームと腐敗を隠す）
-        sage_enc = enc.copy()
-        sage_enc[0:3] = 0.0
-        sage_enc[5]   = 0.0
+    # ---- 視覚レイ（全alive × 全レイ × 全キノコ）一括計算 ----
+    offsets   = (np.arange(n_rays) - n_rays // 2) * (
+                 VISION_ANGLE_DEG / max(1, n_rays - 1))        # (rays,)
+    ray_angles = aa[:, np.newaxis] + offsets                   # (alive, rays)
+    rfx = np.cos(np.radians(ray_angles))                       # (alive, rays)
+    rfy = np.sin(np.radians(ray_angles))
 
-        # BRUTE enc マスク（栄養価・バリアントを隠す）
-        brute_enc = enc.copy()
-        brute_enc[3] = 0.0
-        brute_enc[4] = 0.0
+    # dot積 (alive, rays, mush)
+    dot_ray = (rfx[:, :, np.newaxis] * dx_all[:, np.newaxis, :] +
+               rfy[:, :, np.newaxis] * dy_all[:, np.newaxis, :])
 
-        # ゴール情報（SAGE 用）
-        goal_dx   = gx - pos_x[i]
-        goal_dy   = gy - pos_y[i]
-        goal_dist = math.hypot(goal_dx, goal_dy)
-        goal_ang  = math.atan2(goal_dy, goal_dx) - angle[i]
-        goal_ang  = math.atan2(math.sin(goal_ang),
-                               math.cos(goal_ang)) / math.pi
+    in_range = dist_all[:, np.newaxis, :] < VISION_RANGE       # (alive, 1, mush) → broadcast
+    in_front = dot_ray > 0
+    ray_mask = in_range & in_front                             # (alive, rays, mush)
 
-        obs_sage[i, :6] = sage_enc
-        obs_sage[i, 6]  = float(goal_ang)
-        obs_sage[i, 7]  = min(1.0, goal_dist / FIELD_SIZE)
-        obs_sage[i, 8]  = energy[i] / MAX_ENERGY
-        # [9:11] = 0.0（受信パルス・bottleneck が後で上書き）
+    strength = np.where(
+        ray_mask,
+        1.0 - dist_all[:, np.newaxis, :] / VISION_RANGE,
+        0.0)                                                   # (alive, rays, mush)
+    rays_all = strength.max(axis=-1).astype(np.float32)        # (alive, rays)
 
-        # 視覚レイ（BRUTE 用・n_rays=3 本）
-        rays = np.zeros(n_rays, dtype=np.float32)
-        for ri in range(n_rays):
-            a   = angle[i] + (ri - n_rays // 2) * (
-                  VISION_ANGLE_DEG / max(1, n_rays - 1))
-            rfx = math.cos(math.radians(a))
-            rfy = math.sin(math.radians(a))
-            rdot  = rfx * dx + rfy * dy
-            rmask = (dist < VISION_RANGE) & (rdot > 0)
-            if rmask.any():
-                rays[ri] = float(np.max(
-                    np.where(rmask, 1.0 - dist / VISION_RANGE, 0.0)))
+    # ---- 弁別視野（前方最近僕キノコ）一括計算 ----
+    fx_all = np.cos(np.radians(aa))   # (alive,)
+    fy_all = np.sin(np.radians(aa))
+    dot_fwd = (fx_all[:, np.newaxis] * dx_all +
+               fy_all[:, np.newaxis] * dy_all)                 # (alive, mush)
+    fwd_mask = (dist_all < FOCUS_RANGE) & (dot_fwd > 0)        # (alive, mush)
 
-        obs_brute[i, :6]       = brute_enc
-        obs_brute[i, 6:6+n_rays] = rays
-        # [6+n_rays:11] = 0.0（受信パルス・bottleneck が後で上書き）
+    # ---- ゴール情報（全alive 一括） ----
+    goal_dx   = gx - ax   # (alive,)
+    goal_dy   = gy - ay
+    goal_dist = np.sqrt(goal_dx ** 2 + goal_dy ** 2)
+    goal_ang_abs = np.arctan2(goal_dy, goal_dx) - aa           # (alive,)
+    # 角度を -pi..pi に正規化
+    goal_ang_norm = np.arctan2(np.sin(goal_ang_abs),
+                               np.cos(goal_ang_abs)) / math.pi  # (alive,)
+
+    # ---- obs 配列への代入（alive_idx のループは弁別視野 enc のみ） ----
+    for ii, i in enumerate(alive_idx):
+        # 弁別視野 enc
+        enc = np.zeros(MUSHROOM_ENC_DIM, dtype=np.float32)
+        if fwd_mask[ii].any():
+            best_j = int(np.argmin(
+                np.where(fwd_mask[ii], dist_all[ii], np.inf)))
+            enc[mis_biome[best_j]] = 1.0
+            enc[3] = float(mis_premium[best_j])
+            enc[4] = float(mis_variant[best_j])
+            enc[5] = float(mis_rotten[best_j])
+
+        sage_enc       = enc.copy()
+        sage_enc[0:3]  = 0.0
+        sage_enc[5]    = 0.0
+        brute_enc      = enc.copy()
+        brute_enc[3]   = 0.0
+        brute_enc[4]   = 0.0
+
+        obs_sage[i, :6]          = sage_enc
+        obs_sage[i, 6]           = float(goal_ang_norm[ii])
+        obs_sage[i, 7]           = min(1.0, float(goal_dist[ii]) / FIELD_SIZE)
+        obs_sage[i, 8]           = energy[i] / MAX_ENERGY
+        obs_brute[i, :6]         = brute_enc
+        obs_brute[i, 6:6+n_rays] = rays_all[ii]
 
     return obs_sage, obs_brute
