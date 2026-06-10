@@ -112,7 +112,7 @@ class Game:
         self.audio_bn: 'AudioBN' = _AudioBN()  # 音声専用ダミー
 
         # 高速モード設定
-        self.fast_cfg_goal_count: int = 10   # 終了条件（1【10）
+        self.fast_cfg_goal_count: int = 0    # 終了条件（0=無制限、以降はN体ゴール達成で進化）
         self.fast_cfg_pop_size:   int = GA_POP_SIZE_GPU  # GPU時はpop=3000がデフォルト
         self.fast_cfg_focus:      str = "goal_count"  # 現在フォーカス中の設定項目
         self.auto_save_interval:  int = 10   # N世代ごとに自動セーブ（0=無効）
@@ -467,14 +467,14 @@ class Game:
                         ).length() < GOAL_RADIUS:
                     self.goal_reached_count += 1
         if all_done:
-            if self.goal_reached_count >= self.fast_cfg_goal_count:
+            goal_limit = self.fast_cfg_goal_count
+            if goal_limit > 0 and self.goal_reached_count >= goal_limit:
                 self._evolve_generation(auto_save=True)
                 self.state = GameState.GA
                 return True
             self._evolve_generation()
             return True
         return False
-
     def _step_ga_batch_gpu(self) -> bool:
         """モード3専用のGPU+numpy一括処理"""
         import numpy as np
@@ -528,7 +528,8 @@ class Game:
 
         # 全員死亡チェック
         if not any(ag.alive for ag in self.ga_agents):
-            if self.goal_reached_count >= self.fast_cfg_goal_count:
+            goal_limit = self.fast_cfg_goal_count
+            if goal_limit > 0 and self.goal_reached_count >= goal_limit:
                 self._evolve_generation_gpu(auto_save=True)
                 self.state = GameState.GA
                 return True
@@ -723,10 +724,10 @@ class Game:
             if key == pygame.K_UP or key == pygame.K_RIGHT:
                 self.fast_cfg_goal_count = min(10, self.fast_cfg_goal_count + 1)
             elif key == pygame.K_DOWN or key == pygame.K_LEFT:
-                self.fast_cfg_goal_count = max(1, self.fast_cfg_goal_count - 1)
-            # 数字キー 1～9,0(=10)
-            for n in range(1, 11):
-                kn = getattr(pygame, f"K_{n % 10}", None)
+                self.fast_cfg_goal_count = max(0, self.fast_cfg_goal_count - 1)
+            # 数字キー 0=無制限、 1～9
+            for n in range(0, 10):
+                kn = getattr(pygame, f"K_{n}", None)
                 if kn and key == kn:
                     self.fast_cfg_goal_count = n
         elif self.fast_cfg_focus == "pop_size":
@@ -1005,8 +1006,9 @@ class Game:
 
         # ゴール到達カウンタ
         goal_color = (50, 220, 150) if self.goal_reached_count > 0 else C_GRAY
+        _gl = "∞" if self.fast_cfg_goal_count == 0 else str(self.fast_cfg_goal_count)
         gt = font.render(
-            f"GOAL REACHED: {self.goal_reached_count}/{self.fast_cfg_goal_count}",
+            f"GOAL REACHED: {self.goal_reached_count}/{_gl}",
             True, goal_color)
         self.screen.blit(gt, (x + 6, y + hud_h + 4))
 
@@ -1051,8 +1053,9 @@ class Game:
             self.screen.blit(t, (SCREEN_W // 2 - 130, 140 + i * 22))
 
         goal_color = (50, 220, 150) if self.goal_reached_count > 0 else (100, 100, 120)
+        goal_limit_str = "∞" if self.fast_cfg_goal_count == 0 else str(self.fast_cfg_goal_count)
         gt = font.render(
-            f"GOAL REACHED: {self.goal_reached_count} / {self.fast_cfg_goal_count}",
+            f"GOAL REACHED: {self.goal_reached_count} / {goal_limit_str}",
             True, goal_color)
         self.screen.blit(gt, (SCREEN_W // 2 - gt.get_width() // 2, 290))
 
@@ -1151,15 +1154,17 @@ class Game:
         tl = font_m.render("Goal Completion Count  (Tab to switch)", True, gc_color)
         self.screen.blit(tl, (SCREEN_W // 2 - tl.get_width() // 2, 210))
 
-        # 1〜10 の選択肢
-        for n in range(1, 11):
-            bx = SCREEN_W // 2 - 270 + (n - 1) * 54
+        # 0=∞、 1～10 の選択肢
+        options = [0] + list(range(1, 11))   # 0=∞、1～10
+        for idx_n, n in enumerate(options):
+            bx = SCREEN_W // 2 - 297 + idx_n * 54
             by = 238
             selected = (n == self.fast_cfg_goal_count)
             bc = (255, 180, 0) if selected else (50, 50, 60)
             pygame.draw.rect(self.screen, bc, (bx, by, 44, 28), border_radius=4)
             pygame.draw.rect(self.screen, gc_color, (bx, by, 44, 28), 1, border_radius=4)
-            nt = font_m.render(str(n), True, (0, 0, 0) if selected else (180, 180, 180))
+            label = "∞" if n == 0 else str(n)
+            nt = font_m.render(label, True, (0, 0, 0) if selected else (180, 180, 180))
             self.screen.blit(nt, (bx + 22 - nt.get_width() // 2, by + 5))
 
         # ---- エージェント数 ----
