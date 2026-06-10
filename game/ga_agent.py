@@ -188,9 +188,6 @@ class SageBruteAgent:
 
         # エネルギー消費
         self.energy -= ENERGY_DECAY
-        if self.is_toxic:
-            self.energy += ENERGY_TOXIC
-            self.is_toxic = False
 
         # キノコ収集判定
         m = self.field.collect_mushroom(self.pos.x, self.pos.y)
@@ -247,38 +244,40 @@ class SageBruteAgent:
     def _eat_mushroom(self, m: Mushroom) -> float:
         """キノコを食べてエネルギー変化と報酬を計算する。"""
         if m.is_rotten:
-            self.energy = max(0.0, self.energy + ENERGY_ROTTEN)
-            # 腐敗はカウントに含まない
+            self.energy += ENERGY_ROTTEN
+            self.energy = min(MAX_ENERGY, self.energy)
             return ENERGY_ROTTEN
 
-        # 中毒チェック
-        if m.species_key == self.last_species:
-            self.toxic_count += 1
-        else:
-            self.toxic_count = 1
-            self.last_species = m.species_key
-
-        if self.toxic_count >= TOXIC_COUNT:
-            self.is_toxic = True
-            self.toxic_count = 0
-
-        # 摂取履歴更新
-        self.intake_history.append(m.species_key)
+        # 中毒チェック（同一種連続 TOXIC_COUNT 回）
+        sk = m.species_key
+        self.intake_history.append(sk)
         if len(self.intake_history) > HISTORY_LEN:
             self.intake_history.pop(0)
 
-        # 回復チェック: 直近履歴内に異なるバイオームの普通種2種が揃うか
-        normal_biomes = set(
-            k[0] for k in self.intake_history
-            if k[1] == 'normal'
-        )
-        if len(normal_biomes) >= 2:
-            self.energy = min(MAX_ENERGY, self.energy + abs(ENERGY_TOXIC))
-            self.intake_history.clear()
+        # 連続カウント
+        count = 0
+        for h in reversed(self.intake_history):
+            if h == sk:
+                count += 1
+            else:
+                break
+        self.toxic_count = count
 
-        # エネルギー回復
-        gain = MUSHROOM_SPECIES[m.species_key]
-        self.energy = min(MAX_ENERGY, self.energy + gain)
+        if count >= TOXIC_COUNT:
+            self.energy += ENERGY_TOXIC
+            self.energy = min(MAX_ENERGY, self.energy)
+            return ENERGY_TOXIC
+
+        # 回復チェック（直近 HISTORY_LEN 内に異バイオームの普通种2種）
+        normals_in_history = [h for h in self.intake_history if h[1] == 'normal']
+        biomes_seen = set(h[0] for h in normals_in_history)
+        if len(biomes_seen) >= 2:
+            gain = ENERGY_NORMAL * 1.5   # 回復ボーナス
+        else:
+            gain = MUSHROOM_SPECIES.get(sk, ENERGY_NORMAL)
+
+        self.energy += gain
+        self.energy = min(MAX_ENERGY, self.energy)
         return gain
 
 

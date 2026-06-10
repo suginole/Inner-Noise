@@ -80,6 +80,16 @@ def _check_compat(meta: dict) -> tuple[bool, str]:
     return True, "OK"
 
 
+def check_compatible(genome_flat_size: int) -> bool:
+    """公開互換性チェック: 現在のゲノムサイズと比較する。
+    不一致でもクラッシュさせない。compatible=False を返すだけ。
+    """
+    current_size = _current_genome_size()
+    if current_size < 0:
+        return False
+    return genome_flat_size == current_size
+
+
 def save_model(ga, terrain_seed: int, goal_count: int,
                label: str = "") -> int:
     """GAの現在状態をDBに保存する。"""

@@ -42,6 +42,10 @@ class Bottleneck:
         self.converter = None
         self._last_phoneme: str = ""
 
+    def reset_episode(self):
+        """エピソードリセット（spec互換エイリアス）。"""
+        self.reset(prefill=True)
+
     def reset(self, prefill: bool = True):
         self._buf      = []
         self._frame    = 0
