@@ -112,9 +112,10 @@ class Game:
         self.audio_bn: 'AudioBN' = _AudioBN()  # 音声専用ダミー
 
         # 高速モード設定
-        self.fast_cfg_goal_count: int = 10   # 終了条件（1〜10）
+        self.fast_cfg_goal_count: int = 10   # 終了条件（1【10）
         self.fast_cfg_pop_size:   int = GA_POP_SIZE_GPU  # GPU時はpop=3000がデフォルト
         self.fast_cfg_focus:      str = "goal_count"  # 現在フォーカス中の設定項目
+        self.auto_save_interval:  int = 10   # N世代ごとに自動セーブ（0=無効）
 
         # リセット確認ダイアログ
         self.confirm_reset: bool = False
@@ -550,6 +551,10 @@ class Game:
         """世代進化の共通処理（numpyシリアル用）。"""
         best = self.ga.get_best()
         self.prev_best_genome = copy.deepcopy(best)
+        # 定期自動セーブ（N世代ごと）
+        interval = self.auto_save_interval
+        if interval > 0 and self.ga.generation > 0 and self.ga.generation % interval == 0:
+            auto_save = True
         if auto_save:
             self._do_save(auto=True)
         self.ga.evolve()
@@ -562,6 +567,10 @@ class Game:
         """GPU版の世代進化。"""
         best = self.ga.get_best()
         self.prev_best_genome = copy.deepcopy(best)
+        # 定期自動セーブ（N世代ごと）
+        interval = self.auto_save_interval
+        if interval > 0 and self.ga.generation > 0 and self.ga.generation % interval == 0:
+            auto_save = True
         if auto_save:
             self._do_save(auto=True)
         self.ga.evolve()
@@ -704,8 +713,8 @@ class Game:
 
         # Tab でフォーカス切替
         if key == pygame.K_TAB:
-            items = ["goal_count", "pop_size"]
-            idx = items.index(self.fast_cfg_focus)
+            items = ["goal_count", "pop_size", "auto_save"]
+            idx = items.index(self.fast_cfg_focus) if self.fast_cfg_focus in items else 0
             self.fast_cfg_focus = items[(idx + 1) % len(items)]
             return
 
@@ -715,7 +724,7 @@ class Game:
                 self.fast_cfg_goal_count = min(10, self.fast_cfg_goal_count + 1)
             elif key == pygame.K_DOWN or key == pygame.K_LEFT:
                 self.fast_cfg_goal_count = max(1, self.fast_cfg_goal_count - 1)
-            # 数字キー 1〜9,0(=10)
+            # 数字キー 1～9,0(=10)
             for n in range(1, 11):
                 kn = getattr(pygame, f"K_{n % 10}", None)
                 if kn and key == kn:
@@ -725,6 +734,11 @@ class Game:
                 self.fast_cfg_pop_size = min(5000, self.fast_cfg_pop_size + 100)
             elif key == pygame.K_DOWN or key == pygame.K_LEFT:
                 self.fast_cfg_pop_size = max(50, self.fast_cfg_pop_size - 100)
+        elif self.fast_cfg_focus == "auto_save":
+            if key == pygame.K_UP or key == pygame.K_RIGHT:
+                self.auto_save_interval = min(100, self.auto_save_interval + 1)
+            elif key == pygame.K_DOWN or key == pygame.K_LEFT:
+                self.auto_save_interval = max(0, self.auto_save_interval - 1)
 
     # ----------------------------------------------------------------
     def _update(self, dt: float):
@@ -1021,6 +1035,8 @@ class Game:
         t = font.render("⚡ FAST LEARNING MODE", True, (255, 200, 50))
         self.screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 60))
 
+        sv_str = (f"every {self.auto_save_interval} gen"
+                  if self.auto_save_interval > 0 else "OFF")
         lines = [
             f"Generation: {stats['generation']}",
             f"Best Fitness: {stats['best']:.1f}",
@@ -1028,6 +1044,7 @@ class Game:
             f"Species: {stats.get('species', '-')}",
             f"Frame: {self.ga_frame}",
             f"Pop: {self.ga.pop_size}",
+            f"Auto Save: {sv_str}",
         ]
         for i, line in enumerate(lines):
             t = font_s.render(line, True, (200, 200, 220))
@@ -1160,15 +1177,30 @@ class Game:
         self.screen.blit(pl, (SCREEN_W // 2 - pl.get_width() // 2, 320))
 
         # バー表示
-        bar_w = int(self.fast_cfg_pop_size / 2000 * 560)
+        bar_w = int(min(1.0, self.fast_cfg_pop_size / 5000) * 560)
         pygame.draw.rect(self.screen, (30, 50, 70), (SCREEN_W // 2 - 280, 348, 560, 14),
                          border_radius=4)
         pygame.draw.rect(self.screen, pp_color, (SCREEN_W // 2 - 280, 348, bar_w, 14),
                          border_radius=4)
 
+        # ---- 自動セーブ間隔 ----
+        focus_save = self.fast_cfg_focus == "auto_save"
+        sv_color = (100, 255, 160) if focus_save else (160, 160, 180)
+        sv_bg    = (5, 25, 15) if focus_save else (15, 15, 20)
+        pygame.draw.rect(self.screen, sv_bg,   (SCREEN_W // 2 - 300, 400, 600, 60),
+                         border_radius=8)
+        pygame.draw.rect(self.screen, sv_color, (SCREEN_W // 2 - 300, 400, 600, 60),
+                         2, border_radius=8)
+        sv_label = (f"Auto Save Interval:  every {self.auto_save_interval} gen"
+                    if self.auto_save_interval > 0 else
+                    "Auto Save Interval:  OFF")
+        sl = font_m.render(f"{sv_label}  (←→ to change, Tab to switch)",
+                           True, sv_color)
+        self.screen.blit(sl, (SCREEN_W // 2 - sl.get_width() // 2, 415))
+
         # ---- 開始ボタン ----
         st = font_l.render("Enter / Space: START", True, (50, 220, 150))
-        self.screen.blit(st, (SCREEN_W // 2 - st.get_width() // 2, 420))
+        self.screen.blit(st, (SCREEN_W // 2 - st.get_width() // 2, 490))
 
         hint = font_s.render("ESC / M: Back to Menu", True, C_GRAY)
         self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 30))
