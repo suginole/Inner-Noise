@@ -16,7 +16,7 @@ TILE     = 8
 
 # ---- 地形生成 ----
 TERRAIN_OCTAVES    = 6
-TERRAIN_SCALE      = 0.0005   # 旧値(0.0015)の1/3：バイオームをフィールド内に数個程度に絞る
+TERRAIN_SCALE      = 0.0015   # パーリンノイズスケール（persistence=0.65で密に入り組んだバイオーム）
 MOUNTAIN_THRESHOLD = 0.55
 VALLEY_THRESHOLD   = 0.35
 PEAK_HEIGHT        = 1.0

@@ -41,39 +41,38 @@ class Field:
         xx, yy = np.meshgrid(xs, ys)
         hmap = np.zeros((gs, gs), dtype=np.float32)
         amp, freq = 1.0, TERRAIN_SCALE * gs
-        for _ in range(TERRAIN_OCTAVES):
+        # persistence=0.65（旧値0.5）で高周波成分を強め、バイオームが密に入り組む
+        persistence = 0.65
+        for octave in range(TERRAIN_OCTAVES):
             ox = rng.integers(0, 1000)
             oy = rng.integers(0, 1000)
-            hmap += amp * self._perlin(xx * freq + ox, yy * freq + oy)
-            amp  *= 0.5
+            # 各オクターブで異なるパーミュテーションを使用（シード依存）
+            hmap += amp * self._perlin(xx * freq + ox, yy * freq + oy,
+                                       perm_seed=self._seed + octave * 1000)
+            amp  *= persistence
             freq *= 2.0
         hmap = (hmap - hmap.min()) / (hmap.max() - hmap.min() + 1e-8)
         Field._terrain_cache[self._seed] = hmap
         return hmap
 
     @staticmethod
-    def _perlin(x, y):
+    def _perlin(x, y, perm_seed: int = 42):
         xi = x.astype(int) & 255
         yi = y.astype(int) & 255
         xf = x - x.astype(int)
         yf = y - y.astype(int)
-
         def fade(t):
             return t * t * t * (t * (t * 6 - 15) + 10)
-
         def lerp(a, b, t):
             return a + t * (b - a)
-
-        rng2 = np.random.default_rng(42)
+        rng2 = np.random.default_rng(perm_seed)
         perm  = rng2.permutation(256).astype(np.uint8)
         perm2 = np.concatenate([perm, perm])
-
         def grad(h, x, y):
             h = h & 3
             u = np.where(h < 2, x, y)
             v = np.where(h < 2, y, x)
             return np.where(h & 1, -u, u) + np.where(h & 2, -v, v)
-
         aa = perm2[perm2[xi]   + yi]
         ab = perm2[perm2[xi]   + yi + 1]
         ba = perm2[perm2[xi+1] + yi]
