@@ -20,9 +20,10 @@ class GameState:
     LOAD_RESUME = "load_resume"
     PLAYER      = "player"      # プレイヤー操作モード
     BACKROOM    = "backroom"    # サウンドデバッグモード
+    LOADING     = "loading"     # 初期化中ローディング画面
 
 
-FAST_STEPS = 200
+FAST_STEPS = 20   # 高速モードの1フレームあたりステップ数（応答性を確保）
 CAMERA_SWITCH_THRESHOLD = 10
 
 
@@ -72,15 +73,30 @@ class Game:
 
     # ----------------------------------------------------------------
     def init_ga_mode(self, pop_size: int | None = None):
+        # ローディング画面を表示して画面を更新
+        self.state = GameState.LOADING
+        self._draw_loading("Initializing GA...")
+        pygame.display.flip()
+        pygame.event.pump()
+
         pop = pop_size or GA_POP_SIZE
         self.field      = Field(terrain_seed=TERRAIN_SEED, food_episode=0)
+        self._draw_loading("Building terrain...")
+        pygame.display.flip()
+        pygame.event.pump()
+
         self.ga         = GeneticAlgorithm(pop_size=pop, seed=0)
+        self._draw_loading("Spawning agents...")
+        pygame.display.flip()
+        pygame.event.pump()
+
         self._spawn_agents()
         self.ga_frame   = 0
         self.ga_running = True
         self.goal_count = 0
         self.prev_best_genome = None
         self.tracked_agent    = None
+        # stateは呼び出し元で設定する（GA or GA_FAST）
 
     def _spawn_agents(self):
         self.agents = []
@@ -414,6 +430,10 @@ class Game:
             self.renderer.draw_mode_select()   # プレイヤーモードは将来実装
             return
 
+        if self.state == GameState.LOADING:
+            # ローディング画面は_draw_loading()で直接描画するのでここでは何もしない
+            return
+
         if self.state == GameState.MENU:
             self.renderer.draw_mode_select()
 
@@ -464,6 +484,24 @@ class Game:
         iw = 300
         ix = SCREEN_W // 2 - iw // 2
         self.renderer.draw_intake_panel(tracked, ix, my - 90, w=iw, h=80)
+
+    def _draw_loading(self, msg: str = "Loading..."):
+        """ローディング画面を直接描画する（display.flipは呼び出し元が担当）。"""
+        self.screen.fill(C_BG)
+        font_l = self.renderer.font_l
+        font_s = self.renderer.font_s
+        # タイトル
+        t = font_l.render("INNER NOISE", True, C_WHITE)
+        self.screen.blit(t, (SCREEN_W//2 - t.get_width()//2, SCREEN_H//2 - 60))
+        # メッセージ
+        m = font_s.render(msg, True, (100, 200, 120))
+        self.screen.blit(m, (SCREEN_W//2 - m.get_width()//2, SCREEN_H//2))
+        # スピナー（フレームカウンターで回転）
+        import time
+        chars = ['◐', '◓', '◑', '◒']
+        c = chars[int(time.time() * 4) % 4]
+        sp = font_l.render(c, True, (80, 180, 255))
+        self.screen.blit(sp, (SCREEN_W//2 - sp.get_width()//2, SCREEN_H//2 + 30))
 
     def _draw_fast_overlay(self):
         if not self.ga:
