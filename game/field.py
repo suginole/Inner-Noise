@@ -279,14 +279,30 @@ class Field:
         h = self.hmap
         lo, hi = BIOME_THRESHOLDS
 
-        # グラデーションなし・明確分割
-        w_mask = h < lo          # 沼（W）: 水色
-        m_mask = h >= hi         # 山（M）: 深緑
-        g_mask = ~w_mask & ~m_mask  # 平地（G）: ミルク色
+        # バイオーム新色でグラデーションあり（地形の勾配がわかりやすい）
+        cW = np.array(BIOME_COLORS['W'], dtype=np.float32)
+        cG = np.array(BIOME_COLORS['G'], dtype=np.float32)
+        cM = np.array(BIOME_COLORS['M'], dtype=np.float32)
 
-        rgb[w_mask] = BIOME_COLORS['W']
-        rgb[m_mask] = BIOME_COLORS['M']
-        rgb[g_mask] = BIOME_COLORS['G']
+        w_mask = h < lo
+        m_mask = h >= hi
+        g_mask = ~w_mask & ~m_mask
+
+        # 沼エリア: 深い水色→水色（深さで勾配表現）
+        t_w = np.clip(h / (lo + 1e-8), 0, 1)
+        for c in range(3):
+            dark_w = cW[c] * 0.5
+            rgb[w_mask, c] = (dark_w + (cW[c] - dark_w) * t_w[w_mask]).astype(np.uint8)
+
+        # 山エリア: 平地色→山色（高さで勾配表現）
+        t_m = np.clip((h - hi) / (1.0 - hi + 1e-8), 0, 1)
+        for c in range(3):
+            rgb[m_mask, c] = (cG[c] + (cM[c] - cG[c]) * t_m[m_mask]).astype(np.uint8)
+
+        # 平地エリア: 水色→ミルク色（高さで勾配表現）
+        t_g = np.clip((h - lo) / (hi - lo + 1e-8), 0, 1)
+        for c in range(3):
+            rgb[g_mask, c] = (cW[c] + (cG[c] - cW[c]) * t_g[g_mask]).astype(np.uint8)
 
         rgb_big = np.repeat(np.repeat(rgb, TILE, axis=0), TILE, axis=1)
         surf = pygame.surfarray.make_surface(rgb_big.transpose(1, 0, 2))
