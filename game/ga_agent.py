@@ -17,7 +17,7 @@ from config import *
 from game.sage  import SageNN
 from game.brute import BruteNN
 from game.bottleneck import Bottleneck
-from game.field import Field, Mushroom
+from game.field import Field, Mushroom, encode_mushroom, sage_vision, brute_vision
 
 
 # ================================================================
@@ -112,12 +112,14 @@ class SageBruteAgent:
         self.frame:          int   = 0
 
     def _build_sage_obs(self, received_pulse: int) -> np.ndarray:
-        """SAGE用観測ベクトル（17次元）を構築する。"""
-        # 弁別視野: 正面のキノコ12種one-hot
+        """SAGE用観測ベクトル（11次元）を構築する。"""
+        # 弁別視野: 歩化エンコードしてSAGEマスクを適用
         focus_m = self.field.mushroom_in_focus(self.pos.x, self.pos.y, self.angle)
-        species_onehot = [0.0] * NUM_SPECIES
-        if focus_m is not None and not focus_m.is_rotten:
-            species_onehot[focus_m.species_idx] = 1.0
+        if focus_m is not None:
+            enc = encode_mushroom(focus_m.biome, focus_m.grade, focus_m.species_key[2], focus_m.is_rotten)
+            vision = sage_vision(enc)   # [0:3]=0固定 / [3]=栄養価 / [4]=バリアント / [5]=0固定
+        else:
+            vision = np.zeros(MUSHROOM_ENC_DIM, dtype=np.float32)
 
         # ゴール角度・距離
         goal = pygame.Vector2(*self.field.goal_pos)
@@ -133,16 +135,25 @@ class SageBruteAgent:
         # 受信パルス
         p_bits = [float((received_pulse >> 1) & 1), float(received_pulse & 1)]
 
-        return np.array(species_onehot + [angle_norm, dist_norm, energy_norm] + p_bits,
-                        dtype=np.float32)
+        return np.concatenate([vision, [angle_norm, dist_norm, energy_norm], p_bits]).astype(np.float32)
 
     def _build_brute_obs(self, received_pulse: int) -> np.ndarray:
         """BRUTE用観測ベクトル（11次元）を構築する。"""
-        # 視覚レイ（±45度5本）
+        # 弁別視野: 歩化エンコードしてBRUTEマスクを適用
+        focus_m = self.field.mushroom_in_focus(self.pos.x, self.pos.y, self.angle)
+        if focus_m is not None:
+            enc = encode_mushroom(focus_m.biome, focus_m.grade, focus_m.species_key[2], focus_m.is_rotten)
+            vision = brute_vision(enc)  # [0:3]=バイオーム / [3]=0固定 / [4]=0固定 / [5]=腐敗
+        else:
+            vision = np.zeros(MUSHROOM_ENC_DIM, dtype=np.float32)
+
+        # 視覚レイ（±45度3本）
+        # BRUTE_OBS_DIM=11: vision(6) + rays(3) + p_bits(2) = 11
         rays = []
         angle_rad = math.radians(self.angle)
-        for i in range(VISION_RAYS):
-            t = i / max(1, VISION_RAYS - 1)
+        n_rays = BRUTE_OBS_DIM - MUSHROOM_ENC_DIM - 2   # = 11 - 6 - 2 = 3
+        for i in range(n_rays):
+            t = i / max(1, n_rays - 1)
             ray_angle = angle_rad + math.radians(VISION_ANGLE_DEG * (2 * t - 1))
             ray_val = 0.0
             for step in range(1, int(VISION_RANGE / 20) + 1):
@@ -153,17 +164,10 @@ class SageBruteAgent:
                     break
             rays.append(ray_val)
 
-        # バイオームone-hot
-        biome_oh = self.field.biome_onehot(self.pos.x, self.pos.y)
-
-        # 腐敗フラグ
-        focus_m = self.field.mushroom_in_focus(self.pos.x, self.pos.y, self.angle)
-        rot_flag = 1.0 if (focus_m is not None and focus_m.is_rotten) else 0.0
-
         # 受信パルス
         p_bits = [float((received_pulse >> 1) & 1), float(received_pulse & 1)]
 
-        return np.array(rays + biome_oh + [rot_flag] + p_bits, dtype=np.float32)
+        return np.concatenate([vision, rays, p_bits]).astype(np.float32)
 
     def step(self) -> dict:
         """1フレーム処理。"""

@@ -121,7 +121,8 @@ MUTATE_RATE_INIT   = GA_MUTATION_RATE
 MUTATE_STD_INIT    = GA_MUTATION_STD
 
 # ---- SAGE NN次元 ----
-SAGE_OBS_DIM       = 17   # 弁別視野12 + ゴール角度1 + ゴール距離1 + エネルギー1 + 受信パルス2
+MUSHROOM_ENC_DIM   = 6    # キノコ構造化エンコード次元
+SAGE_OBS_DIM       = 11   # 弁別視野6 + ゴール角度1 + ゴール距離1 + エネルギー1 + 受信パルス2
 SAGE_L3_OUT        = 24
 SAGE_L3_NORMAL     = 12
 SAGE_L3_BUF        = 12
@@ -134,7 +135,7 @@ SAGE_L1_OUT        = 24
 SAGE_ENCODE_DIM    = 2
 
 # ---- BRUTE NN次元 ----
-BRUTE_OBS_DIM      = 11   # 視覚レイ5 + バイオームone-hot3 + 腐敗1 + 受信パルス2
+BRUTE_OBS_DIM      = 11   # 弁別視野6 + 視覚レイ5本 + 受信パルス2
 BRUTE_L3_OUT       = 24
 BRUTE_L3_NORMAL    = 12
 BRUTE_L3_BUF       = 12

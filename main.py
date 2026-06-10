@@ -125,8 +125,16 @@ class Game:
         for _ in range(FAST_STEPS):
             if self._step_ga_once():
                 break
+        # 高速モード中の追従エージェントを更新
+        alive = [a for a in self.agents if a.alive]
+        if self.tracked_agent is None or not self.tracked_agent.alive:
+            self._switch_tracked_agent(alive)
+        elif self.ga_frame % self.TRACK_UPDATE_INTERVAL == 0 and alive:
+            self._switch_tracked_agent(alive)
+
         self.screen.fill(C_BG)
         self._draw_fast_overlay()
+        self._draw_monitor_panels()   # 3パネルモニターを追加
         pygame.display.flip()
 
     def _step_ga_once(self) -> bool:
@@ -298,23 +306,28 @@ class Game:
         self.renderer.draw_ga_overlay(stats, alive_count)
         self.renderer.draw_fitness_graph(self.ga, 20, 150, w=280, h=100)
 
-        # 3パネルモニター
-        if tracked and tracked.alive:
-            genome = tracked.genome
-            bn     = tracked.bn
-            total_w = 280 * 3 + 8 * 2
-            mx = SCREEN_W // 2 - total_w // 2
-            my = SCREEN_H - 230
-            self.renderer.draw_rnn_monitor_panels(genome, bn, x=mx, y=my, panel_w=280, panel_h=220)
-
-            # 摂取履歴パネル
-            iw = 300
-            ix = SCREEN_W // 2 - iw // 2
-            self.renderer.draw_intake_panel(tracked, ix, my - 90, w=iw, h=80)
+        # 3パネルモニター（監視モード・高速モード共通メソッド）
+        self._draw_monitor_panels()
 
         hint = self.renderer.font_s.render(
             "S: Save  Tab: Fast Mode  M: Menu  ESC: Quit", True, C_GRAY)
         self.screen.blit(hint, (SCREEN_W//2 - hint.get_width()//2, SCREEN_H - 20))
+
+    def _draw_monitor_panels(self):
+        """高速モード・監視モード共通の3パネルモニター描画。"""
+        tracked = self.tracked_agent
+        if tracked is None:
+            return
+        genome = tracked.genome
+        bn     = tracked.bn
+        total_w = 280 * 3 + 8 * 2
+        mx = SCREEN_W // 2 - total_w // 2
+        my = SCREEN_H - 230
+        self.renderer.draw_rnn_monitor_panels(genome, bn, x=mx, y=my, panel_w=280, panel_h=220)
+        # 捨取履歴パネル
+        iw = 300
+        ix = SCREEN_W // 2 - iw // 2
+        self.renderer.draw_intake_panel(tracked, ix, my - 90, w=iw, h=80)
 
     def _draw_fast_overlay(self):
         if not self.ga:

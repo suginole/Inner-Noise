@@ -62,6 +62,43 @@ class PerlinNoise:
 
 
 # ---- キノコエンティティ ----
+# ================================================================
+# キノコエンコード関数
+# ================================================================
+def encode_mushroom(biome: str, grade: str, variant: int, is_rotten: bool) -> np.ndarray:
+    """キノコを構造化6次元ベクトルにエンコードする。
+    [0:3] バイオーム one-hot: 沼(1,0,0)/平地(0,1,0)/山(0,0,1)
+    [3]   栄養価: 普通=0.0 / 高栄養=1.0
+    [4]   バリアント: 種①=0.0 / 種②=1.0
+    [5]   腐敗: 新鮮=0.0 / 腐敗=1.0
+    """
+    enc = np.zeros(6, dtype=np.float32)
+    biome_idx = {'W': 0, 'G': 1, 'M': 2}.get(biome, 0)
+    enc[biome_idx] = 1.0
+    enc[3] = 1.0 if grade == 'premium' else 0.0
+    enc[4] = 1.0 if variant == 2 else 0.0
+    enc[5] = 1.0 if is_rotten else 0.0
+    return enc
+
+def sage_vision(enc: np.ndarray) -> np.ndarray:
+    """SAGEが受け取る弁別視野: バイオーム・腐敗をマスク。
+    [0:3]=0固定 / [3]=栄養価 / [4]=バリアント / [5]=0固定
+    """
+    masked = enc.copy()
+    masked[0:3] = 0.0
+    masked[5]   = 0.0
+    return masked
+
+def brute_vision(enc: np.ndarray) -> np.ndarray:
+    """BRUTEが受け取る弁別視野: 栄養価・バリアントをマスク。
+    [0:3]=バイオーム / [3]=0固定 / [4]=0固定 / [5]=腐敗
+    """
+    masked = enc.copy()
+    masked[3] = 0.0
+    masked[4] = 0.0
+    return masked
+
+
 class Mushroom:
     """フィールド上のキノコ1個。"""
     __slots__ = ('pos', 'species_key', 'species_idx', 'biome', 'grade', 'is_rotten')
