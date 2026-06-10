@@ -116,6 +116,10 @@ class SageNN:
         self.last_buf_active = False
         self.last_gru_act    = [0.0] * SAGE_MEM_DIM
 
+    # renderer互換エイリアス
+    @property
+    def W_encode(self): return self.W_enc
+
     def param_count(self) -> int:
         return len(self.flat())
 

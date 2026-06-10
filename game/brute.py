@@ -122,6 +122,12 @@ class BruteNN:
         self.last_gru_act    = [0.0] * BRUTE_MEM_DIM
         self.last_output_act = [0.5, 0.5, 0.0]
 
+    # renderer互換エイリアス
+    @property
+    def W_out(self): return self.W_act
+    @property
+    def W_encode(self): return self.W_enc
+
     def param_count(self) -> int:
         return len(self.flat())
 

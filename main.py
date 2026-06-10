@@ -171,7 +171,6 @@ class Game:
         self._spawn_agents()
         self.ga_frame   = 0
         self.ga_running = True
-        self.goal_count = 0
         self.goal_reached_count = 0
         self.tracked_agent = None
         self.prev_best_genome   = None
@@ -751,10 +750,11 @@ class Game:
             self._draw_ga_monitor()
 
     def _ensure_minimap(self):
-        if self.renderer._minimap_surf is None and self.renderer._static_buf is not None:
-            from pygame import transform
-            self.renderer._minimap_surf = transform.scale(
-                self.renderer._static_buf, (160, 160))
+        if self.renderer._minimap_surf is None:
+            if self.renderer._static_buf is not None:
+                from pygame import transform
+                self.renderer._minimap_surf = transform.scale(
+                    self.renderer._static_buf, (160, 160))
 
     # ----------------------------------------------------------------
     def _draw_ga_monitor(self):

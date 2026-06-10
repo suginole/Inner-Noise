@@ -20,6 +20,41 @@ class GAGenome:
         self.fitness = 0.0
         self.species_id = -1
 
+    # ---- renderer互換プロパティ ----
+    # renderer.pyは genome.sensory / genome.motor を期待する
+    @property
+    def sensory(self): return self.sage
+    @property
+    def motor(self):   return self.brute
+
+    # rendererが getattr(genome, 'last_*') で参照するアクティベーション属性
+    # SAGE→sensory側のエイリアス
+    @property
+    def last_input_act(self):         return [0.0] * SAGE_OBS_DIM
+    @property
+    def last_l3_act(self):            return self.sage.last_l3_act
+    @property
+    def last_sensory_buf(self):       return self.sage.last_buf_act
+    @property
+    def last_sensory_buf_active(self): return self.sage.last_buf_active
+    @property
+    def last_sensory_gru(self):       return self.sage.last_gru_act
+    @property
+    def last_pulse_act(self):
+        p = self.sage.last_pulse
+        return [(p >> 1) & 1, p & 1]
+    # BRUTE→motor側のエイリアス
+    @property
+    def last_motor_l3_act(self):      return self.brute.last_l3_act
+    @property
+    def last_motor_buf(self):         return self.brute.last_buf_act
+    @property
+    def last_motor_buf_active(self):  return self.brute.last_buf_active
+    @property
+    def last_motor_gru(self):         return self.brute.last_gru_act
+    @property
+    def last_output_act(self):        return self.brute.last_output_act
+
     def flat(self):
         return np.concatenate([self.sage.flat(), self.brute.flat()])
 
