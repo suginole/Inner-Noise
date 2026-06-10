@@ -212,10 +212,20 @@ class Game:
     def _spawn_agents(self):
         self.ga_agents = []
         self.tracked_agent = None
-        for genome in self.ga.population:
-            agent_field = self.field.clone_foods()
-            agent = SageBruteAgent(genome, agent_field, self.field.start_pos)
-            self.ga_agents.append(agent)
+        compute_mode = getattr(self, '_compute_mode', 'numpy')
+        if compute_mode == 'torch_gpu':
+            # GPUモード: 全エージェントが同一フィールドを共有する
+            # BatchPhysicsは agents[0].field のキノコリストを使用する
+            shared_field = self.field.clone_foods()
+            for genome in self.ga.population:
+                agent = SageBruteAgent(genome, shared_field, self.field.start_pos)
+                self.ga_agents.append(agent)
+        else:
+            # CPUモード: 各エージェントに独立フィールド（公平な評価）
+            for genome in self.ga.population:
+                agent_field = self.field.clone_foods()
+                agent = SageBruteAgent(genome, agent_field, self.field.start_pos)
+                self.ga_agents.append(agent)
 
     # ----------------------------------------------------------------
     def init_backroom_mode(self):
@@ -484,6 +494,7 @@ class Game:
             if ag.alive:
                 obs_sage_np[i]  = ag._get_obs_sage()
                 obs_brute_np[i] = ag._get_obs_brute()
+        _t1 = time.perf_counter()
 
         # SAGEフォワード（GPU・固定pop_sizeバッチ）
         if is_gen:
@@ -494,6 +505,7 @@ class Game:
                     bwm.pulse_buf[i].append(int(pulse_np[i]))
         else:
             bwm.forward_sage(obs_sage_np, is_pulse_frame=False)
+        _t2 = time.perf_counter()
 
         # BRUTEフォワード（GPU・固定pop_sizeバッチ）
         if is_cons:
@@ -505,6 +517,7 @@ class Game:
             bwm.last_action = action_t
         else:
             action_t, _ = bwm.forward_brute(obs_brute_np, is_pulse_frame=False)
+        _t3 = time.perf_counter()
 
         # 物理・衝突・ゴール判定（numpy一括）
         actions_np = bwm.last_action.cpu().numpy()   # (pop, 3)
@@ -513,6 +526,7 @@ class Game:
         self.goal_reached_count += bphys.check_goals(
             self.ga_agents, self.field.goal_pos)
         bphys.sync_to_agents(self.ga_agents)
+        _t4 = time.perf_counter()
 
         # 全員死亡チェック
         if not any(ag.alive for ag in self.ga_agents):
@@ -523,12 +537,15 @@ class Game:
             self._evolve_generation_gpu()
             return True
 
-        # パフォーマンスデバッグ出力
+        # 内訳パフォーマンスデバッグ出力
         if self.ga_frame % 100 == 0:
-            _t1 = time.perf_counter()
             alive = sum(1 for a in self.ga_agents if a.alive)
             print(f"[BATCH_GPU] frame={self.ga_frame} "
-                  f"step={(_t1-_t0)*1000:.2f}ms "
+                  f"obs={(_t1-_t0)*1000:.1f}ms "
+                  f"sage={(_t2-_t1)*1000:.1f}ms "
+                  f"brute={(_t3-_t2)*1000:.1f}ms "
+                  f"phys={(_t4-_t3)*1000:.1f}ms "
+                  f"total={(_t4-_t0)*1000:.1f}ms "
                   f"alive={alive}/{len(self.ga_agents)}")
         return False
 
