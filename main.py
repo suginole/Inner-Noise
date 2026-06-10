@@ -487,13 +487,10 @@ class Game:
         is_gen  = (f % PULSE_GEN_INTERVAL == 0)
         is_cons = (f % PULSE_CONSUME_RATE == 0)
 
-        # 全個体のobs収集（固定pop_size・死亡個体はゼロ埋め）
-        obs_sage_np  = np.zeros((bwm.pop_size, SAGE_OBS_DIM),  dtype=np.float32)
-        obs_brute_np = np.zeros((bwm.pop_size, BRUTE_OBS_DIM), dtype=np.float32)
-        for i, ag in enumerate(self.ga_agents):
-            if ag.alive:
-                obs_sage_np[i]  = ag._get_obs_sage()
-                obs_brute_np[i] = ag._get_obs_brute()
+        # 全個体のobs一括収集（numpy一括・ Pythonループ最小化）
+        from game.batch_physics import collect_obs_batch
+        obs_sage_np, obs_brute_np = collect_obs_batch(
+            self.ga_agents, self.field)
         _t1 = time.perf_counter()
 
         # SAGEフォワード（GPU・固定pop_sizeバッチ）
