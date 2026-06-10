@@ -16,7 +16,7 @@ TILE     = 8
 
 # ---- 地形生成 ----
 TERRAIN_OCTAVES    = 6
-TERRAIN_SCALE      = 0.0015
+TERRAIN_SCALE      = 0.0005   # 旧値(0.0015)の1/3：バイオームをフィールド内に数個程度に絞る
 MOUNTAIN_THRESHOLD = 0.55
 VALLEY_THRESHOLD   = 0.35
 PEAK_HEIGHT        = 1.0
@@ -49,7 +49,7 @@ VISION_RAYS        = 5
 FOCUS_RANGE        = 400.0
 
 # ---- 餌（旧・audio-phoneme互換） ----
-FOOD_COUNT         = 200
+FOOD_COUNT         = 340      # 旧値(200)の1.7倍
 FOOD_RADIUS        = 12
 FOOD_GRID_SPACING  = 200
 FOOD_JITTER        = 80
@@ -179,7 +179,7 @@ ENERGY_TOXIC   = -30.0
 ENERGY_GOAL    = 15.0
 
 # キノコ
-MUSHROOM_DENSITY  = 0.015
+MUSHROOM_DENSITY  = 0.0255   # 旧値(0.015)の1.7倍
 ROT_PROBABILITY   = 0.3
 TOXIC_COUNT       = 3
 HISTORY_LEN       = 5
