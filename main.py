@@ -157,7 +157,7 @@ class Game:
         self.player_bn = Bottleneck(SageNN(rng), BruteNN(rng))
         self.done_message = ""
 
-    def init_ga_mode(self, pop_size: int | None = None):
+    def init_ga_mode(self, pop_size: int | None = None, fast_mode: bool = False):
         # ローディング画面を表示して画面を更新
         self.screen.fill(C_BG)
         t = self.renderer.font_m.render("Loading...", True, C_WHITE)
@@ -165,7 +165,16 @@ class Game:
         pygame.display.flip()
         pygame.event.pump()
 
-        pop = pop_size if pop_size is not None else GA_POP_SIZE
+        if fast_mode:
+            from game.compute import detect_compute_mode, detect_device, get_pop_size
+            self._compute_mode = detect_compute_mode()
+            self._device       = detect_device()
+            pop = pop_size or get_pop_size(self._compute_mode)
+        else:
+            self._compute_mode = 'numpy'
+            self._device       = 'cpu'
+            pop = pop_size or GA_POP_SIZE_CPU
+
         self.field      = Field(terrain_seed=TERRAIN_SEED, food_episode=0)
         self.ga         = GeneticAlgorithm(pop_size=pop, seed=0)
         self._spawn_agents()
@@ -175,6 +184,17 @@ class Game:
         self.tracked_agent = None
         self.prev_best_genome   = None
         self.done_message = ""
+        self._bwm   = None
+        self._bphys = None
+
+        if self._compute_mode == 'torch_gpu':
+            from game.batch_gpu     import BatchWeightManager
+            from game.batch_physics import BatchPhysics
+            self._bwm   = BatchWeightManager(self.ga.population, self._device)
+            self._bphys = BatchPhysics(self.ga_agents)
+            print(f"[GPU] device={self._device}  pop={pop}")
+        else:
+            print(f"[CPU] numpy serial  pop={pop}")
 
     def _spawn_ga_agents(self):
         """_spawn_agentsの互換エイリアス。"""
@@ -399,49 +419,125 @@ class Game:
 
     def _step_ga_once(self) -> bool:
         """
-        1フレーム分のGA更新。
+        1フレーム分のGA更新。計算モードに応じてGPU/CPUに分岐する。
         世代進化が発生したら True を返す。
         """
         if not self.ga_running:
             return False
-
         self.ga_frame += 1
-        all_done = True
 
+        if (getattr(self, '_compute_mode', 'numpy') == 'torch_gpu'
+                and self._bwm is not None):
+            return self._step_ga_batch_gpu()
+        else:
+            return self._step_ga_serial()
+
+    def _step_ga_serial(self) -> bool:
+        """既存のnumpyシリアル処理（モード2・変更なし）"""
+        all_done = True
         for agent in self.ga_agents:
             if not agent.alive:
                 continue
             all_done = False
             result = agent.step()
-            if result["done"]:
+            if result['done']:
                 agent.genome.fitness = agent.total_reward
                 agent.alive = False
-                goal_pos = pygame.Vector2(*self.field.goal_pos)
-                if (agent.pos - goal_pos).length() < GOAL_RADIUS:
+                if (agent.pos - pygame.Vector2(*self.field.goal_pos)
+                        ).length() < GOAL_RADIUS:
                     self.goal_reached_count += 1
-
         if all_done:
-            # 学習完了判定
             if self.goal_reached_count >= self.fast_cfg_goal_count:
-                self._evolve_generation(auto_save=True)  # 完了時自動セーブ
-                self.state = GameState.GA   # 監視モードへ自動遷移
+                self._evolve_generation(auto_save=True)
+                self.state = GameState.GA
                 return True
             self._evolve_generation()
             return True
+        return False
 
+    def _step_ga_batch_gpu(self) -> bool:
+        """モード3専用のGPU+numpy一括処理"""
+        import numpy as np
+        bwm   = self._bwm
+        bphys = self._bphys
+        f = bwm.bn_frame
+        bwm.bn_frame += 1
+
+        is_gen  = (f % PULSE_GEN_INTERVAL == 0)
+        is_cons = (f % PULSE_CONSUME_RATE == 0)
+
+        # 全個体のobs収集（固定pop_size・死亡個体はゼロ埋め）
+        obs_sage_np  = np.zeros((bwm.pop_size, SAGE_OBS_DIM),  dtype=np.float32)
+        obs_brute_np = np.zeros((bwm.pop_size, BRUTE_OBS_DIM), dtype=np.float32)
+        for i, ag in enumerate(self.ga_agents):
+            if ag.alive:
+                obs_sage_np[i]  = ag._get_obs_sage()
+                obs_brute_np[i] = ag._get_obs_brute()
+
+        # SAGEフォワード（GPU・固定pop_sizeバッチ）
+        if is_gen:
+            pulse_t  = bwm.forward_sage(obs_sage_np, is_pulse_frame=True)
+            pulse_np = pulse_t.cpu().numpy()
+            for i in range(bwm.pop_size):
+                if self.ga_agents[i].alive:
+                    bwm.pulse_buf[i].append(int(pulse_np[i]))
+        else:
+            bwm.forward_sage(obs_sage_np, is_pulse_frame=False)
+
+        # BRUTEフォワード（GPU・固定pop_sizeバッチ）
+        if is_cons:
+            for i in range(bwm.pop_size):
+                pulse = bwm.pulse_buf[i].pop(0) if bwm.pulse_buf[i] else 0
+                obs_brute_np[i, -2] = float((pulse >> 1) & 1)
+                obs_brute_np[i, -1] = float(pulse & 1)
+            action_t, _ = bwm.forward_brute(obs_brute_np, is_pulse_frame=True)
+            bwm.last_action = action_t
+        else:
+            action_t, _ = bwm.forward_brute(obs_brute_np, is_pulse_frame=False)
+
+        # 物理・衝突・ゴール判定（numpy一括）
+        actions_np = bwm.last_action.cpu().numpy()   # (pop, 3)
+        bphys.apply_actions(actions_np)
+        bphys.check_mushrooms(self.ga_agents)
+        self.goal_reached_count += bphys.check_goals(
+            self.ga_agents, self.field.goal_pos)
+        bphys.sync_to_agents(self.ga_agents)
+
+        # 全員死亡チェック
+        if not any(ag.alive for ag in self.ga_agents):
+            if self.goal_reached_count >= self.fast_cfg_goal_count:
+                self._evolve_generation_gpu(auto_save=True)
+                self.state = GameState.GA
+                return True
+            self._evolve_generation_gpu()
+            return True
         return False
 
     def _evolve_generation(self, auto_save: bool = False):
-        """世代進化の共通処理。"""
-        # 前世代の最高ゲノムをスナップショット保存
+        """世代進化の共通処理（numpyシリアル用）。"""
         best = self.ga.get_best()
         self.prev_best_genome = copy.deepcopy(best)
-        # 自動セーブ（学習完了時）
         if auto_save:
             self._do_save(auto=True)
         self.ga.evolve()
         self.field.reset_foods(food_episode=self.ga.generation)
         self._spawn_agents()
+        self.ga_frame = 0
+        self.goal_reached_count = 0
+
+    def _evolve_generation_gpu(self, auto_save: bool = False):
+        """GPU版の世代進化。"""
+        best = self.ga.get_best()
+        self.prev_best_genome = copy.deepcopy(best)
+        if auto_save:
+            self._do_save(auto=True)
+        self.ga.evolve()
+        self.field.reset_foods(food_episode=self.ga.generation)
+        self._spawn_agents()
+        # バッチマネージャーを新世代で更新
+        self._bwm.update_weights(self.ga.population)
+        from game.batch_physics import BatchPhysics
+        self._bphys = BatchPhysics(self.ga_agents)
         self.ga_frame = 0
         self.goal_reached_count = 0
 
@@ -564,8 +660,9 @@ class Game:
     def _handle_fast_cfg_key(self, key):
         """高速モード設定画面のキー操作。"""
         if key == pygame.K_RETURN or key == pygame.K_SPACE:
-            # 設定確定 → 高速モード開始
-            self.init_ga_mode(pop_size=self.fast_cfg_pop_size)
+            # 設定確定 → 高速モード開始（fast_mode=TrueでGPU対応）
+            self.init_ga_mode(pop_size=self.fast_cfg_pop_size,
+                              fast_mode=True)
             self.state = GameState.GA_FAST
             return
         if key == pygame.K_ESCAPE or key == pygame.K_m:
@@ -879,6 +976,15 @@ class Game:
         bg.fill((5, 5, 10, 245))
         self.screen.blit(bg, (0, 0))
 
+        # コンピュートバックエンド表示（右上）
+        mode_str   = getattr(self, '_compute_mode', 'numpy')
+        device_str = getattr(self, '_device', 'cpu')
+        pop_str    = self.ga.pop_size if self.ga else '?'
+        c = (100, 220, 100) if mode_str == 'torch_gpu' else (180, 180, 180)
+        bt = font_s.render(
+            f"COMPUTE: {mode_str} / {device_str}  pop={pop_str}", True, c)
+        self.screen.blit(bt, (SCREEN_W - bt.get_width() - 10, 10))
+
         t = font.render("⚡ FAST LEARNING MODE", True, (255, 200, 50))
         self.screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 60))
 
@@ -1106,5 +1212,7 @@ class Game:
 
 # ================================================================
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     game = Game()
     game.run()

@@ -259,3 +259,8 @@ PULSE_COLOR_OFF    = ( 60,  60,  60)
 # 色定数（SAGE-BRUTE用追加）
 C_FOOD_ROT  = ( 80,  60,  20)
 C_FOOD_HI   = (255, 140,  20)
+
+# GPU高速化
+COMPUTE_MODE    = "auto"  # "auto" | "numpy" | "torch_gpu"
+GA_POP_SIZE_GPU = 3000    # モード3でのpop_size
+GA_POP_SIZE_CPU = 50      # モード2でのpop_size
