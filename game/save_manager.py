@@ -1,18 +1,10 @@
 """
-save_manager.py — SQLiteセーブ・ロード管理
+save_manager.py — SQLiteセーブ・ロード管理（Sage-Brute版）
 
-DB スキーマ:
-  models テーブルに全個体の重みベクトル（pickle）を保存する。
-  ネットワーク構造メタデータで互換性チェックを行う。
-
-保存対象:
-  - 全個体の重みベクトル（種情報含む）
-  - エリート個体の重みベクトル
-  - 適応的突然変異率の現在値
-  - 世代数カウンタ
-
-保存しないもの:
-  - GRUの隠れ状態（エピソード内オンラインのため不要）
+互換性チェック:
+  genome_flat_size の一致のみで判定。
+  旧アーキテクチャ（rnn_bottleneck）のデータは compatible=False として
+  NG表示するだけでクラッシュしない。
 """
 import sqlite3
 import pickle
@@ -49,99 +41,50 @@ def init_db():
         conn.commit()
 
 
+def _current_genome_size() -> int:
+    """現在のゲノムフラットサイズを返す。"""
+    try:
+        from game.ga_agent import GAGenome
+        return GAGenome.total_flat_size()
+    except Exception:
+        return -1
+
+
 def _build_net_meta(ga) -> dict:
-    """ネットワーク構造メタデータを構築する（新GRU分割アーキテクチャ対応）。"""
-    from game.ga_agent import GAGenome, OBS_DIM
-    from game.rnn_bottleneck import SensoryNN, MotorNN
-    from config import (
-        SENSORY_INPUT_DIM, SENSORY_FF_DIM, SENSORY_GRU_DIM, SENSORY_INTEG_DIM,
-        MOTOR_EMBED_DIM, MOTOR_GRU_DIM, MOTOR_INTEG_DIM, MOTOR_CORTEX_DIM,
-        MOTOR_OUTPUT_DIM, BN_PARAMS, GRU_INHERIT_DIM, GRU_EPISODE_DIM,
-    )
+    """ネットワーク構造メタデータを構築する（Sage-Brute版）。"""
+    from game.ga_agent import GAGenome
+    from game.sage import SageNN
+    from game.brute import BruteNN
+    from config import SAGE_OBS_DIM, BRUTE_OBS_DIM
     return {
-        "obs_dim":            OBS_DIM,
-        "sensory_input_dim":  SENSORY_INPUT_DIM,
-        "sensory_ff_dim":     SENSORY_FF_DIM,
-        "sensory_gru_dim":    SENSORY_GRU_DIM,
-        "sensory_integ_dim":  SENSORY_INTEG_DIM,
-        "motor_embed_dim":    MOTOR_EMBED_DIM,
-        "motor_gru_dim":      MOTOR_GRU_DIM,
-        "motor_integ_dim":    MOTOR_INTEG_DIM,
-        "motor_cortex_dim":   MOTOR_CORTEX_DIM,
-        "motor_output_dim":   MOTOR_OUTPUT_DIM,
-        "bn_params":          BN_PARAMS,
-        "gru_inherit_dim":    GRU_INHERIT_DIM,
-        "gru_episode_dim":    GRU_EPISODE_DIM,
-        "sensory_flat_size":  SensoryNN.flat_size(),
-        "motor_flat_size":    MotorNN.flat_size(),
-        "genome_flat_size":   GAGenome.total_flat_size(),
-        "pop_size":           ga.pop_size,
+        "arch":              "sage-brute",
+        "sage_obs_dim":      SAGE_OBS_DIM,
+        "brute_obs_dim":     BRUTE_OBS_DIM,
+        "sage_flat_size":    SageNN.param_count(),
+        "brute_flat_size":   BruteNN.param_count(),
+        "genome_flat_size":  GAGenome.total_flat_size(),
+        "pop_size":          ga.pop_size,
     }
 
 
 def _check_compat(meta: dict) -> tuple[bool, str]:
-    """現在の構造とメタデータの互換性をチェックする（新GRU分割アーキテクチャ対応）。"""
-    from game.ga_agent import GAGenome, OBS_DIM
-    from game.rnn_bottleneck import SensoryNN, MotorNN
-    from config import (
-        SENSORY_INPUT_DIM, SENSORY_FF_DIM, SENSORY_GRU_DIM, SENSORY_INTEG_DIM,
-        MOTOR_EMBED_DIM, MOTOR_GRU_DIM, MOTOR_INTEG_DIM, MOTOR_CORTEX_DIM,
-        MOTOR_OUTPUT_DIM, BN_PARAMS, GRU_INHERIT_DIM, GRU_EPISODE_DIM,
-    )
-    errors = []
-
-    # --- 旧アーキテクチャ（H1/H2形式）との互換性チェック ---
-    # 旧形式のメタデータが保存されている場合は非互換と判定する
-    if "h1" in meta or "h2" in meta:
-        return False, "旧アーキテクチャ形式 (H1/H2) のデータは現在のGRU分割設計と互換性がありません"
-
-    # --- 新アーキテクチャの互換性チェック ---
-    # obs_dim は必須チェック
-    if meta.get("obs_dim") != OBS_DIM:
-        errors.append(f"obs_dim: saved={meta.get('obs_dim')} current={OBS_DIM}")
-
-    # ゲノムフラットサイズが記録されている場合はそれを優先チェック
-    if "genome_flat_size" in meta:
-        current_flat = GAGenome.total_flat_size()
-        if meta["genome_flat_size"] != current_flat:
-            errors.append(
-                f"genome_flat_size: saved={meta['genome_flat_size']} current={current_flat}"
-            )
-    else:
-        # 旧形式の新アーキテクチャメタデータ（個別次元チェック）
-        checks = [
-            ("sensory_input_dim",  SENSORY_INPUT_DIM),
-            ("sensory_ff_dim",     SENSORY_FF_DIM),
-            ("sensory_gru_dim",    SENSORY_GRU_DIM),
-            ("sensory_integ_dim",  SENSORY_INTEG_DIM),
-            ("motor_embed_dim",    MOTOR_EMBED_DIM),
-            ("motor_gru_dim",      MOTOR_GRU_DIM),
-            ("motor_integ_dim",    MOTOR_INTEG_DIM),
-            ("motor_cortex_dim",   MOTOR_CORTEX_DIM),
-            ("motor_output_dim",   MOTOR_OUTPUT_DIM),
-            ("bn_params",          BN_PARAMS),
-            ("gru_inherit_dim",    GRU_INHERIT_DIM),
-            ("gru_episode_dim",    GRU_EPISODE_DIM),
-        ]
-        for key, current_val in checks:
-            if key in meta and meta[key] != current_val:
-                errors.append(f"{key}: saved={meta[key]} current={current_val}")
-
-    if errors:
-        return False, "NN structure mismatch: " + ", ".join(errors)
+    """互換性チェック: genome_flat_sizeの一致のみで判定。
+    旧アーキテクチャのデータは compatible=False として NG 表示するだけ。
+    """
+    saved_size = meta.get("genome_flat_size", 0)
+    current_size = _current_genome_size()
+    if current_size < 0:
+        return False, "現在のゲノムサイズを取得できません"
+    if saved_size != current_size:
+        return False, f"ゲノムサイズ不一致: saved={saved_size} current={current_size}"
     return True, "OK"
 
 
 def save_model(ga, terrain_seed: int, goal_count: int,
                label: str = "") -> int:
-    """
-    GAの現在状態をDBに保存する。
-    Returns: 保存されたレコードのID
-    """
+    """GAの現在状態をDBに保存する。"""
     init_db()
     stats = ga.get_stats()
-
-    # 保存データを構築
     data = {
         "population": [g.flat().tolist() for g in ga.population],
         "species_ids": [g.species_id for g in ga.population],
@@ -170,10 +113,7 @@ def save_model(ga, terrain_seed: int, goal_count: int,
 
 
 def load_model(record_id: int, ga):
-    """
-    DBからモデルをロードしてGAオブジェクトを復元する。
-    互換性チェックに失敗した場合は ValueError を送出する。
-    """
+    """DBからモデルをロードしてGAオブジェクトを復元する。"""
     init_db()
     with _get_conn() as conn:
         row = conn.execute(
@@ -183,7 +123,7 @@ def load_model(record_id: int, ga):
     if row is None:
         raise ValueError(f"Record id={record_id} not found.")
 
-    meta = json.loads(row["net_meta"])
+    meta = json.loads(row["net_meta"]) if row["net_meta"] else {}
     ok, msg = _check_compat(meta)
     if not ok:
         raise ValueError(f"Incompatible model: {msg}")
@@ -193,7 +133,6 @@ def load_model(record_id: int, ga):
     from game.ga_agent import GAGenome
     import numpy as np
 
-    # 個体群を復元
     new_pop = []
     for flat_list in data["population"]:
         g = GAGenome.from_flat(np.array(flat_list, dtype=np.float32))

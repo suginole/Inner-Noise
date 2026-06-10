@@ -191,3 +191,16 @@ PULSE_COLOR_OFF    = ( 60,  60,  60)   # 消灯
 # PHONEME TABLE（音素変換用）
 PHONEME_TABLE = {0: 'う', 1: 'い', 2: 'お', 3: 'あ'}
 PHONEME_VOWEL = PHONEME_TABLE
+
+# 音声出力
+AUDIO_SAMPLE_RATE   = 22050
+AUDIO_FRAME_MS      = 100    # ms（10Hzパルスに同期）
+AUDIO_FRAME_SAMPLES = int(AUDIO_SAMPLE_RATE * AUDIO_FRAME_MS / 1000)  # = 2205
+PHONEME_FORMANTS = {
+    'a': (400,  600),
+    'i': (150, 1150),
+    'u': (150,  400),
+    'o': (250,  400),
+}
+PITCH_FACTOR_HIGH = 0.7    # S→B（SAGEが送信）高ピッチ
+PITCH_FACTOR_LOW  = 0.35   # B→S（BRUTEが送信）低ピッチ
