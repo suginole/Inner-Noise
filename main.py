@@ -113,7 +113,7 @@ class Game:
 
         # 高速モード設定
         self.fast_cfg_goal_count: int = 10   # 終了条件（1〜10）
-        self.fast_cfg_pop_size:   int = GA_POP_SIZE
+        self.fast_cfg_pop_size:   int = GA_POP_SIZE_GPU  # GPU時はpop=3000がデフォルト
         self.fast_cfg_focus:      str = "goal_count"  # 現在フォーカス中の設定項目
 
         # リセット確認ダイアログ
@@ -193,6 +193,15 @@ class Game:
             self._bwm   = BatchWeightManager(self.ga.population, self._device)
             self._bphys = BatchPhysics(self.ga_agents)
             print(f"[GPU] device={self._device}  pop={pop}")
+        else:
+            print(f"[CPU] numpy serial  pop={pop}")
+
+        # GPU初期化確認デバッグ出力
+        if self._bwm is not None:
+            print(f"[BWM] device={self._bwm.device} "
+                  f"pop={self._bwm.pop_size} "
+                  f"W3_sage.shape={self._bwm.ws['W3'].shape} "
+                  f"W3_sage.device={self._bwm.ws['W3'].device}")
         else:
             print(f"[CPU] numpy serial  pop={pop}")
 
@@ -458,6 +467,8 @@ class Game:
     def _step_ga_batch_gpu(self) -> bool:
         """モード3専用のGPU+numpy一括処理"""
         import numpy as np
+        import time
+        _t0 = time.perf_counter()
         bwm   = self._bwm
         bphys = self._bphys
         f = bwm.bn_frame
@@ -511,6 +522,14 @@ class Game:
                 return True
             self._evolve_generation_gpu()
             return True
+
+        # パフォーマンスデバッグ出力
+        if self.ga_frame % 100 == 0:
+            _t1 = time.perf_counter()
+            alive = sum(1 for a in self.ga_agents if a.alive)
+            print(f"[BATCH_GPU] frame={self.ga_frame} "
+                  f"step={(_t1-_t0)*1000:.2f}ms "
+                  f"alive={alive}/{len(self.ga_agents)}")
         return False
 
     def _evolve_generation(self, auto_save: bool = False):
@@ -689,7 +708,7 @@ class Game:
                     self.fast_cfg_goal_count = n
         elif self.fast_cfg_focus == "pop_size":
             if key == pygame.K_UP or key == pygame.K_RIGHT:
-                self.fast_cfg_pop_size = min(2000, self.fast_cfg_pop_size + 100)
+                self.fast_cfg_pop_size = min(5000, self.fast_cfg_pop_size + 100)
             elif key == pygame.K_DOWN or key == pygame.K_LEFT:
                 self.fast_cfg_pop_size = max(50, self.fast_cfg_pop_size - 100)
 

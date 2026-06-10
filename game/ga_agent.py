@@ -198,45 +198,53 @@ class SageBruteAgent:
 
     def _get_mushroom_enc(self):
         enc = np.zeros(MUSHROOM_ENC_DIM, dtype=np.float32)
-        best_dist = FOCUS_RANGE
-        best_m    = None
+        if not self.field.mushrooms:
+            return enc
+        mpos = np.array([[m.pos.x, m.pos.y]
+                         for m in self.field.mushrooms],
+                        dtype=np.float32)
         rad = math.radians(self.angle)
-        fx  = math.cos(rad)
-        fy  = math.sin(rad)
-        for m in self.field.mushrooms:
-            d = (self.pos - m.pos).length()
-            if d < best_dist:
-                dx = m.pos.x - self.pos.x
-                dy = m.pos.y - self.pos.y
-                dot = fx * dx + fy * dy
-                if dot > 0:
-                    best_dist = d
-                    best_m    = m
-        if best_m is not None:
-            bmap = {'W': 0, 'G': 1, 'M': 2}
-            enc[bmap[best_m.biome]] = 1.0
-            enc[3] = 1.0 if best_m.grade == 'premium' else 0.0
-            enc[4] = 1.0 if best_m.variant == 2 else 0.0
-            enc[5] = 1.0 if best_m.is_rotten else 0.0
+        fx, fy = math.cos(rad), math.sin(rad)
+        dx = mpos[:, 0] - self.pos.x
+        dy = mpos[:, 1] - self.pos.y
+        dist = np.sqrt(dx*dx + dy*dy)
+        dot  = fx * dx + fy * dy
+        mask = (dist < FOCUS_RANGE) & (dot > 0)
+        if not mask.any():
+            return enc
+        dists_masked = np.where(mask, dist, np.inf)
+        best_i = int(np.argmin(dists_masked))
+        best_m = self.field.mushrooms[best_i]
+        bmap = {'W': 0, 'G': 1, 'M': 2}
+        enc[bmap[best_m.biome]] = 1.0
+        enc[3] = 1.0 if best_m.grade == 'premium' else 0.0
+        enc[4] = 1.0 if best_m.variant == 2 else 0.0
+        enc[5] = 1.0 if best_m.is_rotten else 0.0
         return enc
 
     def _cast_rays(self):
-        rays = []
         n_rays = BRUTE_OBS_DIM - MUSHROOM_ENC_DIM - 2  # = 11 - 6 - 2 = 3
+        if not self.field.mushrooms:
+            return [0.0] * n_rays
+        mpos = np.array([[m.pos.x, m.pos.y]
+                         for m in self.field.mushrooms],
+                        dtype=np.float32)
+        dx = mpos[:, 0] - self.pos.x
+        dy = mpos[:, 1] - self.pos.y
+        dist = np.sqrt(dx*dx + dy*dy)
+        rays = []
         for i in range(n_rays):
-            a = self.angle + (i - n_rays // 2) * (VISION_ANGLE_DEG / max(1, n_rays - 1))
+            a = self.angle + (i - n_rays // 2) * (
+                VISION_ANGLE_DEG / max(1, n_rays - 1))
             rad = math.radians(a)
-            fx  = math.cos(rad)
-            fy  = math.sin(rad)
-            best = 0.0
-            for m in self.field.mushrooms:
-                dx = m.pos.x - self.pos.x
-                dy = m.pos.y - self.pos.y
-                d  = math.hypot(dx, dy)
-                if d < VISION_RANGE:
-                    dot = fx * dx + fy * dy
-                    if dot > 0:
-                        best = max(best, 1.0 - d / VISION_RANGE)
+            fx, fy = math.cos(rad), math.sin(rad)
+            dot  = fx * dx + fy * dy
+            mask = (dist < VISION_RANGE) & (dot > 0)
+            if mask.any():
+                best = float(np.max(
+                    np.where(mask, 1.0 - dist / VISION_RANGE, 0.0)))
+            else:
+                best = 0.0
             rays.append(best)
         return rays
 
