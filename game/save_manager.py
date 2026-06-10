@@ -52,6 +52,7 @@ def init_db():
 def _build_net_meta(ga) -> dict:
     """ネットワーク構造メタデータを構築する（Sage-Brute版）。"""
     from game.ga_agent import GAGenome
+    from config import SAGE_OBS_DIM, BRUTE_OBS_DIM
     return {
         "arch":              "sage-brute",
         "sage_obs_dim":      SAGE_OBS_DIM,
