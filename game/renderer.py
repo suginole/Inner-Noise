@@ -580,10 +580,11 @@ class Renderer:
         sub = self.font_m.render("10Hz Bottleneck Communication", True, C_GRAY)
         self.screen.blit(sub, (SCREEN_W//2 - sub.get_width()//2, 220))
         options = [
+            ("1", "PLAYER MODE", "プレイヤー操作モード",         (100, 220, 150)),
             ("2", "GA MODE",    "GAエージェントを学習させる",   (100, 200, 120)),
             ("3", "FAST MODE",  "高速学習モード",               (255, 200, 50)),
             ("L", "LOAD MODEL", "保存済みモデルをロードする",   (180, 140, 220)),
-            ("O", "SOUND MODE", "音声入出力デバッグ",           (255, 120, 180)),
+            ("O", "SOUND MODE", "音声入出力デバッグ",           (180, 100, 220)),
         ]
         for i, (key, name, desc, color) in enumerate(options):
             oy = 300 + i * 60
@@ -781,11 +782,17 @@ class Renderer:
         pygame.draw.rect(self.screen, (60, 60, 80), (x + 8, ry, ww, wh), 1)
         if waveform is not None and len(waveform) > 0:
             import numpy as np
-            n_draw = min(ww, len(waveform))
-            step = max(1, len(waveform) // n_draw)
+            arr = np.asarray(waveform, dtype=np.float32)
+            # int16スケール（32768）または-1～1の浮動小数に対応
+            max_val = max(abs(arr.max()), abs(arr.min()), 1.0)
+            if max_val > 1.5:
+                arr = arr / 32768.0   # int16スケール
+            n_draw = min(ww, len(arr))
+            step = max(1, len(arr) // n_draw)
             pts = []
             for j in range(n_draw):
-                sv = float(waveform[j * step])
+                sv = float(arr[j * step])
+                sv = max(-1.0, min(1.0, sv))
                 px = x + 8 + j
                 py = int(ry + wh // 2 - sv * (wh // 2 - 2))
                 py = max(ry, min(ry + wh - 1, py))

@@ -156,6 +156,23 @@ class Game:
     def _update_backroom(self, dt: float):
         pass   # バックルームはイベント駆動のみ
 
+    def _toggle_audio(self):
+        """音声ON/OFFを切り替える。GAモード・高速モード・サウンドモード共通。"""
+        bn = None
+        if self.tracked_agent and hasattr(self.tracked_agent, 'bn'):
+            bn = self.tracked_agent.bn
+        elif self.br_bn is not None:
+            bn = self.br_bn
+        if bn is not None:
+            if bn.audio_enabled:
+                bn.disable_audio()
+                self.save_toast_msg   = "AUDIO OFF"
+                self.save_toast_timer = FPS * 2
+            else:
+                bn.enable_audio()
+                self.save_toast_msg   = "AUDIO ON"
+                self.save_toast_timer = FPS * 2
+
     def _handle_backroom_key(self, key):
         """バックルームモードのキー入力処理。"""
         if key in (pygame.K_ESCAPE, pygame.K_m):
@@ -163,8 +180,7 @@ class Game:
             self.state = GameState.MENU
             return
         if key == pygame.K_v:
-            if self.br_bn is not None:
-                self.br_bn.toggle_audio()
+            self._toggle_audio()
             return
         hex_map = {
             pygame.K_0: 0,  pygame.K_1: 1,  pygame.K_2: 2,  pygame.K_3: 3,
@@ -343,13 +359,7 @@ class Game:
             elif key == pygame.K_s:
                 self._do_save()
             elif key == pygame.K_v:
-                # 音声ON/OFF: tracked_agentのbnに属当
-                if self.tracked_agent and hasattr(self.tracked_agent, 'bn'):
-                    bn = self.tracked_agent.bn
-                    if bn.audio_enabled:
-                        bn.disable_audio()
-                    else:
-                        bn.enable_audio()
+                self._toggle_audio()
             elif key == pygame.K_TAB:
                 if self.ga is None:
                     self.init_ga_mode()

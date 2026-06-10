@@ -197,10 +197,15 @@ AUDIO_SAMPLE_RATE   = 22050
 AUDIO_FRAME_MS      = 100    # ms（10Hzパルスに同期）
 AUDIO_FRAME_SAMPLES = int(AUDIO_SAMPLE_RATE * AUDIO_FRAME_MS / 1000)  # = 2205
 PHONEME_FORMANTS = {
-    'a': (400,  600),
-    'i': (150, 1150),
-    'u': (150,  400),
-    'o': (250,  400),
+    'a': (800,  1200),
+    'i': (300,  2300),
+    'u': (300,   800),
+    'o': (500,   800),
 }
-PITCH_FACTOR_HIGH = 0.7    # S→B（SAGEが送信）高ピッチ
-PITCH_FACTOR_LOW  = 0.35   # B→S（BRUTEが送信）低ピッチ
+PITCH_FACTOR_HIGH = 1.4    # S→B（SAGEが送信）高ピッチ（♥）
+PITCH_FACTOR_LOW  = 0.7    # B→S（BRUTEが送信）低ピッチ（♂）
+
+# phoneme.pyが必要とする母音判定閾値
+VOWEL_F2F1_I = 6.0    # F2/F1比がこれ以上なら「い」
+VOWEL_F1_A   = 650    # F1がこれ以上なら「あ」
+VOWEL_F2_U   = 1200   # F2がこれ以上なら「う」
