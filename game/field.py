@@ -279,21 +279,14 @@ class Field:
         h = self.hmap
         lo, hi = BIOME_THRESHOLDS
 
-        # 沼（W）
-        w_mask = h < lo
-        rgb[w_mask] = C_VALLEY
+        # グラデーションなし・明確分割
+        w_mask = h < lo          # 沼（W）: 水色
+        m_mask = h >= hi         # 山（M）: 深緑
+        g_mask = ~w_mask & ~m_mask  # 平地（G）: ミルク色
 
-        # 山（M）
-        m_mask = h >= hi
-        t_m = np.clip((h - hi) / (1.0 - hi + 1e-8), 0, 1)
-        for c in range(3):
-            rgb[m_mask, c] = (C_PLAIN[c] + (C_MOUNTAIN[c] - C_PLAIN[c]) * t_m[m_mask]).astype(np.uint8)
-
-        # 平地（G）
-        g_mask = ~w_mask & ~m_mask
-        t_g = np.clip((h - lo) / (hi - lo + 1e-8), 0, 1)
-        for c in range(3):
-            rgb[g_mask, c] = (C_VALLEY[c] + (C_PLAIN[c] - C_VALLEY[c]) * t_g[g_mask]).astype(np.uint8)
+        rgb[w_mask] = BIOME_COLORS['W']
+        rgb[m_mask] = BIOME_COLORS['M']
+        rgb[g_mask] = BIOME_COLORS['G']
 
         rgb_big = np.repeat(np.repeat(rgb, TILE, axis=0), TILE, axis=1)
         surf = pygame.surfarray.make_surface(rgb_big.transpose(1, 0, 2))

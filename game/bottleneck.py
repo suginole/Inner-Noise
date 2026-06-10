@@ -49,6 +49,8 @@ class Bottleneck:
         self.direction = 'S→B'
         self._last_action   = np.array([0.0, 0.5, 0.0])
         self._last_pulse    = 0
+        self._last_obs_sage  = None   # モニター表示用
+        self._last_obs_brute = None   # モニター表示用
         self._display_queue   = []
         self._display_history = []
         self._display_phoneme = ""
@@ -72,6 +74,10 @@ class Bottleneck:
         1フレーム処理。
         Returns: BRUTEの行動ベクトル [Accel, Steer, Brake]
         """
+        # モニター表示用に保存
+        self._last_obs_sage  = obs_sage
+        self._last_obs_brute = obs_brute
+
         f = self._frame
         is_gen  = (f % PULSE_GEN_INTERVAL == 0)
         is_cons = (f % PULSE_CONSUME_RATE == 0)

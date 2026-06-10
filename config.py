@@ -63,7 +63,7 @@ VISION_RAYS        = 5
 FOCUS_RANGE        = 400.0
 
 # ---- キノコ ----
-MUSHROOM_DENSITY   = 0.008          # 高密度
+MUSHROOM_DENSITY   = 0.015          # 高密度（旧値の約倍）
 ROT_PROBABILITY    = 0.3            # 腐敗確率
 TOXIC_COUNT        = 3              # 同一種連続摂取で中毒
 HISTORY_LEN        = 5              # 摂取履歴保持数
@@ -170,10 +170,22 @@ C_FOOD         = (255, 220,  50)
 C_FOOD_HI      = (255, 140,  20)
 C_FOOD_ROT     = ( 80,  60,  20)
 
-# バイオーム色
-C_VALLEY       = ( 30,  60,  40)
-C_PLAIN        = ( 80, 120,  50)
-C_MOUNTAIN     = (120, 100,  80)
+# バイオーム色（グラデーションなし・明確分割）
+C_VALLEY       = (135, 206, 235)   # 沼: 水色
+C_PLAIN        = (245, 240, 220)   # 平地: ミルク色
+C_MOUNTAIN     = ( 34,  85,  34)   # 山: 深緑
+
+# バイオーム別色ディクショナリ
+BIOME_COLORS = {
+    'W': (135, 206, 235),
+    'G': (245, 240, 220),
+    'M': ( 34,  85,  34),
+}
+
+# パルス配色（方向別）
+PULSE_COLOR_S_TO_B = (255, 180,  50)   # 暖色・オレンジ系（SAGEが送信）
+PULSE_COLOR_B_TO_S = ( 80, 180, 255)   # 寒色・青系（BRUTEが送信）
+PULSE_COLOR_OFF    = ( 60,  60,  60)   # 消灯
 
 # PHONEME TABLE（音素変換用）
 PHONEME_TABLE = {0: 'う', 1: 'い', 2: 'お', 3: 'あ'}
