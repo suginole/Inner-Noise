@@ -163,6 +163,34 @@ class Renderer:
                     pygame.draw.circle(self.screen, C_WHITE, (fx, fy), 6, 1)
 
     # ----------------------------------------------------------------
+    def draw_field_brute_pov(self, field, cam: pygame.Vector2):
+        """ブルート目線のフィールド描画。
+        キノコの表示:
+          - 腐敗あり: 暗い赤色（危険シグナル）
+          - 居屋なし・食べられる: 白い円（小）
+          バイオーム・種別は表示しない（BRUTEには見えない）
+        """
+        # 地形バッファは通常の draw_field と共有
+        if self._static_buf is None:
+            self._static_buf = self._build_static_buf(field)
+        src_rect = pygame.Rect(int(cam.x), int(cam.y), SCREEN_W, SCREEN_H)
+        self.screen.blit(self._static_buf, (0, 0), src_rect)
+
+        # キノコを BRUTE 目線で描画
+        for m in field.mushrooms:
+            fx = int(m.pos.x - cam.x)
+            fy = int(m.pos.y - cam.y)
+            if -20 < fx < SCREEN_W + 20 and -20 < fy < SCREEN_H + 20:
+                if m.is_rotten:
+                    # 腐敗: 暗い赤色・小さめ
+                    pygame.draw.circle(self.screen, (160, 40, 40), (fx, fy), 7)
+                    pygame.draw.circle(self.screen, (220, 60, 60), (fx, fy), 7, 2)
+                else:
+                    # 居屋なし・食べられる: 白い円（小）バイオーム・種別は不明
+                    pygame.draw.circle(self.screen, (220, 220, 220), (fx, fy), 6)
+                    pygame.draw.circle(self.screen, (160, 160, 160), (fx, fy), 6, 1)
+
+    # ----------------------------------------------------------------
     def draw_minimap(self, field, car_pos: pygame.Vector2,
                      goal_pos: tuple, x: int = 20, y: int = 20,
                      w: int = 160, h: int = 160):

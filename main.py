@@ -5,6 +5,7 @@ main.py — Blind Driving Survival エントリーポイント
 import sys
 import os
 import copy
+import math
 
 import pygame
 from config import *
@@ -12,6 +13,7 @@ from game.field import Field
 from game.car import Car
 from game.player_agent import PlayerAgent
 from game.ga_agent import GAGenome, GeneticAlgorithm, SageBruteAgent
+from game.hack_agent import HackAgent
 from game.bottleneck import Bottleneck
 from game.renderer import Renderer
 from game import save_manager
@@ -61,6 +63,7 @@ class _AudioBN:
 class GameState:
     MENU        = "menu"
     PLAYER      = "player"
+    HACK        = "hack"         # ハックモード（Hキー）
     GA          = "ga"          # 通常GAモード（描画あり）
     GA_FAST_CFG = "ga_fast_cfg" # 高速モード設定画面
     GA_FAST     = "ga_fast"     # 高速学習モード（描画完全スキップ）
@@ -94,6 +97,9 @@ class Game:
         self.player_car:   Car | None = None
         self.player_agent: PlayerAgent | None = None
         self.player_bn:    Bottleneck | None = None
+        # ハックモード
+        self.hack_agent:   HackAgent | None = None
+        self.hack_field:   Field | None = None
 
         # GAモード共通
         self.ga:           GeneticAlgorithm | None = None
@@ -156,6 +162,25 @@ class Game:
         import numpy as np
         rng = np.random.default_rng(0)
         self.player_bn = Bottleneck(SageNN(rng), BruteNN(rng))
+        self.done_message = ""
+
+    def init_hack_mode(self):
+        """ハックモードを初期化する。
+        現在のGAの最高適応度ゲノムを使用する。
+        GAがない場合はランダムゲノムで起動。
+        """
+        self.hack_field = Field(terrain_seed=TERRAIN_SEED, food_episode=0)
+        if self.ga is not None and self.ga.population:
+            genome = self.ga.get_best()
+        elif self.prev_best_genome is not None:
+            genome = self.prev_best_genome
+        else:
+            # GAがない場合はランダムゲノム
+            genome = GAGenome()
+        self.hack_agent = HackAgent(
+            genome,
+            self.hack_field.clone_foods(),
+            self.hack_field.start_pos)
         self.done_message = ""
 
     def init_ga_mode(self, pop_size: int | None = None, fast_mode: bool = False):
@@ -617,6 +642,9 @@ class Game:
                 if event.key == pygame.K_1:
                     self.init_player_mode()
                     self.state = GameState.PLAYER
+                elif event.key == pygame.K_h:
+                    self.init_hack_mode()
+                    self.state = GameState.HACK
                 elif event.key == pygame.K_2:
                     self.init_ga_mode()
                     self.state = GameState.GA
@@ -675,8 +703,17 @@ class Game:
                 if event.key == pygame.K_r:
                     self.init_player_mode()
 
-            elif self.state == GameState.GA:
+            elif self.state == GameState.HACK:
                 if event.key == pygame.K_m:
+                    self.state = GameState.MENU
+                elif event.key == pygame.K_r:
+                    self.init_hack_mode()
+
+            elif self.state == GameState.GA:
+                if event.key == pygame.K_h:
+                    self.init_hack_mode()
+                    self.state = GameState.HACK
+                elif event.key == pygame.K_m:
                     if self.ga is not None and self.ga.generation > 0:
                         self.confirm_menu = True
                     else:
@@ -757,6 +794,8 @@ class Game:
     def _update(self, dt: float):
         if self.state == GameState.PLAYER:
             self._update_player(dt)
+        elif self.state == GameState.HACK:
+            self._update_hack(dt)
         elif self.state == GameState.GA:
             self._update_ga_monitor(dt)
         elif self.state == GameState.BACKROOM:
@@ -773,6 +812,18 @@ class Game:
                 self.done_message = "GOAL!"
             else:
                 self.done_message = "GAME OVER"
+            self.done_timer = FPS * 3
+
+    def _update_hack(self, dt: float):
+        """ハックモードの毎フレーム更新。"""
+        if self.hack_agent is None or not self.hack_agent.alive:
+            if self.done_timer > 0:
+                self.done_timer -= 1
+            return
+        self.hack_agent.update_keys()
+        result = self.hack_agent.step()
+        if result['done']:
+            self.done_message = "GAME OVER"
             self.done_timer = FPS * 3
 
     # tracked_agentを再計算する間隔（1000フレームごと）
@@ -903,8 +954,75 @@ class Game:
                 "M: Menu  R: Reset  Tab: Fast Mode  ESC: Quit", True, C_GRAY)
             self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 20))
 
+        elif self.state == GameState.HACK:
+            self._draw_hack()
+
         elif self.state == GameState.GA:
             self._draw_ga_monitor()
+
+    def _draw_hack(self):
+        """ハックモード描画。BRUTE目線（腐敗・可食判別あり、バイオーム・種別なし）。"""
+        if self.hack_agent is None:
+            return
+        ag  = self.hack_agent
+        cam = self.renderer.calc_camera(ag.pos)
+
+        # BRUTE目線でフィールド描画
+        self.renderer.draw_field_brute_pov(ag.field, cam)
+        self._ensure_minimap()
+
+        # 視野コーンとエージェント描画
+        self.renderer.draw_vision_cone(ag, cam)
+        sx = int(ag.pos.x - cam.x)
+        sy = int(ag.pos.y - cam.y)
+        rad = math.radians(ag.angle)
+        pts = [
+            (sx + math.cos(rad) * 14, sy + math.sin(rad) * 14),
+            (sx + math.cos(rad + 2.5) * 8, sy + math.sin(rad + 2.5) * 8),
+            (sx + math.cos(rad - 2.5) * 8, sy + math.sin(rad - 2.5) * 8),
+        ]
+        pygame.draw.polygon(self.screen, C_CAR, pts)
+
+        # ミニマップ
+        self.renderer.draw_minimap(ag.field, ag.pos, ag.field.goal_pos)
+
+        # HUD
+        font_s = self.renderer.font_s
+        font_m = self.renderer.font_m
+
+        # エネルギーバー
+        self.renderer._draw_energy_bar(ag.energy / MAX_ENERGY, 20, SCREEN_H - 40)
+
+        # ステータス
+        bg = pygame.Surface((260, 56), pygame.SRCALPHA)
+        bg.fill((10, 12, 20, 180))
+        self.screen.blit(bg, (20, SCREEN_H - 100))
+        t1 = font_s.render(
+            f"Food:{ag.food_collected}  Dist:{ag.dist_to_goal:.0f}px", True, C_HUD_TEXT)
+        self.screen.blit(t1, (24, SCREEN_H - 96))
+        t2 = font_s.render(
+            f"Speed:{ag.speed:.2f}  Toxic:{ag.toxic_count}", True, C_GRAY)
+        self.screen.blit(t2, (24, SCREEN_H - 80))
+        # キー入力状態
+        ctrl_str = "[PLAYER]" if ag._player_active else "[BRUTE NN]"
+        ctrl_col = (100, 220, 255) if ag._player_active else (180, 180, 100)
+        t3 = font_s.render(ctrl_str, True, ctrl_col)
+        self.screen.blit(t3, (24, SCREEN_H - 62))
+
+        # パルス表示（ボトルネック）
+        self.renderer._draw_pulse_display(ag.bn, SCREEN_W // 2 - 120, SCREEN_H - 70)
+
+        # ハックモードバッジ
+        badge = font_m.render("⚡ HACK MODE", True, (255, 200, 50))
+        self.screen.blit(badge, (SCREEN_W // 2 - badge.get_width() // 2, 14))
+
+        if self.done_message:
+            color = C_ENERGY_LO
+            self.renderer.draw_overlay(self.done_message, color)
+
+        hint = font_s.render(
+            "WASD/↑↓←→: 操作  M: Menu  R: Reset  H: ハックモード再起動", True, C_GRAY)
+        self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 20))
 
     def _ensure_minimap(self):
         if self.renderer._minimap_surf is None:
