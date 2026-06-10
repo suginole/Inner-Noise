@@ -11,10 +11,50 @@ from config import *
 from game.field import Field
 from game.car import Car
 from game.player_agent import PlayerAgent
-from game.ga_agent import GAAgent, GAGenome, GeneticAlgorithm
+from game.ga_agent import GAGenome, GeneticAlgorithm, SageBruteAgent
 from game.bottleneck import Bottleneck
 from game.renderer import Renderer
 from game import save_manager
+
+
+# ================================================================
+class _AudioBN:
+    """音声専用ダミーボトルネック。サウンドモードと音声共有用。"""
+    def __init__(self):
+        self.audio_enabled = False
+        self.converter     = None
+        self._last_pulse   = [0, 0]
+        self._history      = []
+        self._frame        = 0
+        self.direction     = 'S→B'
+
+    def enable_audio(self):
+        if self.converter is None:
+            from game.phoneme import PhonemeConverter
+            self.converter = PhonemeConverter()
+        self.audio_enabled = True
+
+    def disable_audio(self):
+        self.audio_enabled = False
+
+    def toggle_audio(self) -> bool:
+        if self.audio_enabled:
+            self.disable_audio()
+        else:
+            self.enable_audio()
+        return self.audio_enabled
+
+    def tick(self, dt=0):
+        pass
+
+    def get_mode(self):             return 'listen'
+    def get_turn_progress(self):    return 0.0
+    def get_display_progress(self): return 0.0
+    def get_current_pulse(self):    return [0, 0]
+    def get_pulse_history(self):    return []
+    def get_display_history(self):  return []
+    def get_display_phoneme(self):  return ''
+    def get_last_phoneme(self):     return ''
 
 
 # ================================================================
@@ -57,7 +97,7 @@ class Game:
 
         # GAモード共通
         self.ga:           GeneticAlgorithm | None = None
-        self.ga_agents:    list[GAAgent] = []
+        self.ga_agents:    list = []
         self.ga_frame:     int = 0
         self.ga_running:   bool = False
         self.goal_reached_count: int = 0
@@ -66,10 +106,10 @@ class Game:
         self.prev_best_genome: GAGenome | None = None
 
         # 追従中エージェント（更新・音声・モニター描画を共通の参照に統一）
-        self.tracked_agent: 'GAAgent | None' = None
+        self.tracked_agent = None
 
         # 音声入出力用ボトルネック（GAモード共有）
-        self.audio_bn: Bottleneck = Bottleneck()
+        self.audio_bn: 'AudioBN' = _AudioBN()  # 音声専用ダミー
 
         # 高速モード設定
         self.fast_cfg_goal_count: int = 10   # 終了条件（1〜10）
@@ -99,7 +139,7 @@ class Game:
         self.br_bits4:      int = 0          # 手動入力された4bits値
         self.br_waveform    = None           # 直近の合成波形
         self.br_mic_data:   dict | None = None  # マイク解析結果
-        self.br_bn:         Bottleneck = Bottleneck()  # バックルーム専用BN
+        self.br_bn:         'AudioBN' = _AudioBN()  # バックルーム専用BN
         self.br_mic_thread_running: bool = False
 
         # DB初期化
@@ -114,30 +154,35 @@ class Game:
         self.done_message = ""
 
     def init_ga_mode(self, pop_size: int | None = None):
+        # ローディング画面を表示して画面を更新
+        self.screen.fill(C_BG)
+        t = self.renderer.font_m.render("Loading...", True, C_WHITE)
+        self.screen.blit(t, (SCREEN_W//2 - t.get_width()//2, SCREEN_H//2))
+        pygame.display.flip()
+        pygame.event.pump()
+
         pop = pop_size if pop_size is not None else GA_POP_SIZE
-        self.field      = Field(terrain_seed=42, food_episode=0)
+        self.field      = Field(terrain_seed=TERRAIN_SEED, food_episode=0)
         self.ga         = GeneticAlgorithm(pop_size=pop, seed=0)
-        self._spawn_ga_agents()
+        self._spawn_agents()
         self.ga_frame   = 0
         self.ga_running = True
+        self.goal_count = 0
         self.goal_reached_count = 0
+        self.tracked_agent = None
         self.prev_best_genome   = None
         self.done_message = ""
 
     def _spawn_ga_agents(self):
+        """_spawn_agentsの互換エイリアス。"""
+        self._spawn_agents()
+
+    def _spawn_agents(self):
         self.ga_agents = []
-        self.tracked_agent = None  # 世代更新時に追従先をリセット
+        self.tracked_agent = None
         for genome in self.ga.population:
-            car = Car(*self.field.start_pos)
-            # 各エージェントに独立した餅セットを渡す。
-            # clone_foods()は餅リストのみコピーし、地形・座標は共有するので軽量。
-            # これにより他エージェントの餅取得に影響されず公平な評価が可能になる。
             agent_field = self.field.clone_foods()
-            agent = GAAgent(car, agent_field, genome)
-            # 音声が有効なら全エージェントのbnにコンバーターを属成
-            if self.audio_bn.audio_enabled and hasattr(agent, 'bn'):
-                agent.bn.audio_enabled = True
-                agent.bn.converter     = self.audio_bn.converter
+            agent = SageBruteAgent(genome, agent_field, self.field.start_pos)
             self.ga_agents.append(agent)
 
     # ----------------------------------------------------------------
@@ -146,7 +191,7 @@ class Game:
         self.br_bits4    = 0
         self.br_waveform = None
         self.br_mic_data = None
-        self.br_bn       = Bottleneck()
+        self.br_bn       = _AudioBN()
         # マイクスレッドを開始
         self._start_mic_thread()
 
@@ -361,14 +406,15 @@ class Game:
         all_done = True
 
         for agent in self.ga_agents:
-            if not agent.car.alive:
+            if not agent.alive:
                 continue
             all_done = False
             result = agent.step()
             if result["done"]:
                 agent.genome.fitness = agent.total_reward
-                agent.car.alive = False
-                if agent.car.dist_to_goal < GOAL_RADIUS:
+                agent.alive = False
+                goal_pos = pygame.Vector2(*self.field.goal_pos)
+                if (agent.pos - goal_pos).length() < GOAL_RADIUS:
                     self.goal_reached_count += 1
 
         if all_done:
@@ -387,28 +433,12 @@ class Game:
         # 前世代の最高ゲノムをスナップショット保存
         best = self.ga.get_best()
         self.prev_best_genome = copy.deepcopy(best)
-        # ダミー入力でアクティベーションを更新（表示用）
-        dummy_obs = [0.5] * 12
-        dummy_pulse = self.prev_best_genome.sensory.forward(dummy_obs)
-        self.prev_best_genome.motor.forward(dummy_pulse)
-        self.prev_best_genome.update_activations(
-            type('_BN', (), {
-                'last_sensory_gru': self.prev_best_genome.sensory.last_gru_act,
-                'last_motor_gru':   self.prev_best_genome.motor.last_gru_act,
-                'last_output':      self.prev_best_genome.motor.last_output_act,
-                'sensory':          self.prev_best_genome.sensory,
-                'motor':            self.prev_best_genome.motor,
-            })(),
-            dummy_obs
-        )
-
         # 自動セーブ（学習完了時）
         if auto_save:
             self._do_save(auto=True)
-
         self.ga.evolve()
         self.field.reset_foods(food_episode=self.ga.generation)
-        self._spawn_ga_agents()
+        self._spawn_agents()
         self.ga_frame = 0
         self.goal_reached_count = 0
 
@@ -597,10 +627,10 @@ class Game:
             return
         self._step_ga_once()
 
-        alive_agents = [ag for ag in self.ga_agents if ag.car.alive]
+        alive_agents = [ag for ag in self.ga_agents if ag.alive]
 
         # tracked_agentが死亡した場合は即座に再選択する
-        if self.tracked_agent is not None and not self.tracked_agent.car.alive:
+        if self.tracked_agent is not None and not self.tracked_agent.alive:
             self._switch_tracked_agent(alive_agents)
         # tracked_agentが未設定の場合も即座に選択する
         elif self.tracked_agent is None and alive_agents:
@@ -634,19 +664,18 @@ class Game:
 
     # ----------------------------------------------------------------
     def _get_camera_focus(self) -> pygame.Vector2:
-        alive_agents = [ag for ag in self.ga_agents if ag.car.alive]
+        alive_agents = [ag for ag in self.ga_agents if ag.alive]
         if not alive_agents:
             return pygame.Vector2(self.field.start_pos)
         if len(alive_agents) > CAMERA_SWITCH_THRESHOLD:
-            cx = sum(ag.car.pos.x for ag in alive_agents) / len(alive_agents)
-            cy = sum(ag.car.pos.y for ag in alive_agents) / len(alive_agents)
+            cx = sum(ag.pos.x for ag in alive_agents) / len(alive_agents)
+            cy = sum(ag.pos.y for ag in alive_agents) / len(alive_agents)
             return pygame.Vector2(cx, cy)
         else:
-            # tracked_agentが生存中ならそれを優先、そうでなければ最高報酬で再計算
-            if self.tracked_agent is not None and self.tracked_agent.car.alive:
-                return pygame.Vector2(self.tracked_agent.car.pos)
+            if self.tracked_agent is not None and self.tracked_agent.alive:
+                return pygame.Vector2(self.tracked_agent.pos)
             best = max(alive_agents, key=lambda ag: ag.total_reward)
-            return pygame.Vector2(best.car.pos)
+            return pygame.Vector2(best.pos)
 
     # ----------------------------------------------------------------
     def _draw(self):
@@ -737,25 +766,22 @@ class Game:
 
         alive_count = 0
         for ag in self.ga_agents:
-            if not ag.car.alive:
+            if not ag.alive:
                 continue
             alive_count += 1
-            ag.car.draw(self.screen, cam, color=(40, 100, 160))
+            self._draw_agent_dot(ag, cam, color=(40, 100, 160))
 
         # tracked_agentを追従エージェントとして使用
         tracked = self.tracked_agent
-        if tracked and tracked.car.alive:
-            self.renderer.draw_vision_cone(tracked.car, cam)
-            tracked.car.draw(self.screen, cam, color=(255, 200, 50))
-            if alive_count <= CAMERA_SWITCH_THRESHOLD:
-                self._draw_tracking_indicator(tracked.car, cam)
+        if tracked and tracked.alive:
+            self._draw_agent_dot(tracked, cam, color=(255, 200, 50))
 
         self.renderer.draw_minimap(self.field, focus, self.field.goal_pos)
         self._draw_ga_overlay(alive_count, tracked)
         self.renderer.draw_fitness_graph(self.ga, 20, 150, w=280, h=100)
 
         # アクティベーションモニター: tracked_agentのゲノムとbnを使用
-        if tracked and tracked.car.alive:
+        if tracked and tracked.alive:
             display_genome = tracked.genome
             bn_for_panel   = tracked.bn if hasattr(tracked, 'bn') else self.audio_bn
         elif self.prev_best_genome is not None:
@@ -777,6 +803,19 @@ class Game:
         hint = self.renderer.font_s.render(
             "S: Save  V: Audio  Tab: Fast Mode  M: Menu  ESC: Quit", True, C_GRAY)
         self.screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 20))
+
+    def _draw_agent_dot(self, agent, cam, color):
+        """SageBruteAgentを円として描画する。"""
+        sx = int(agent.pos.x - cam.x)
+        sy = int(agent.pos.y - cam.y)
+        if 0 <= sx < SCREEN_W and 0 <= sy < SCREEN_H:
+            pygame.draw.circle(self.screen, color, (sx, sy), 6)
+            # 進行方向を線で示す
+            import math
+            rad = math.radians(agent.angle)
+            ex = sx + int(math.cos(rad) * 10)
+            ey = sy + int(math.sin(rad) * 10)
+            pygame.draw.line(self.screen, (255, 255, 255), (sx, sy), (ex, ey), 2)
 
     def _draw_snapshot_label(self):
         """前世代スナップショットのラベルを描画する。"""
@@ -857,25 +896,9 @@ class Game:
             True, goal_color)
         self.screen.blit(gt, (SCREEN_W // 2 - gt.get_width() // 2, 290))
 
-        # アクティベーションモニター: 常に現在最優秀個体の本物を表示
-        # 高速モード中は最高適応度ゲノムを使用
+        # アクティベーションモニター: 高速モード中は最高適応度ゲノムを表示
         fast_display_genome = self.ga.get_best() if self.ga else None
         if fast_display_genome is not None:
-            # ダミー入力でアクティベーションを更新（高速モード中は実際の観測なし）
-            dummy_obs = [0.5] * 12
-            dummy_pulse = fast_display_genome.sensory.forward(dummy_obs)
-            fast_display_genome.motor.forward(dummy_pulse)
-            fast_display_genome.update_activations(
-                type('_BN', (), {
-                    'last_sensory_gru': fast_display_genome.sensory.last_gru_act,
-                    'last_motor_gru':   fast_display_genome.motor.last_gru_act,
-                    'last_output':      fast_display_genome.motor.last_output_act,
-                    'sensory':          fast_display_genome.sensory,
-                    'motor':            fast_display_genome.motor,
-                })(),
-                dummy_obs
-            )
-            # 3パネルモニター（画面下部中央）
             total_w = 280 * 3 + 8 * 2
             mx = SCREEN_W // 2 - total_w // 2
             self.renderer.draw_rnn_monitor_panels(

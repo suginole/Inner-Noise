@@ -1,101 +1,89 @@
 # =============================================================
-# Blind Driving Survival — 設定・定数
+# Inner Noise — Sage & Brute  設定・定数
+# （audio-phoneme既存定数を維持して SAGE/BRUTE定数を追加）
 # =============================================================
 
 # ---- ウィンドウ ----
 SCREEN_W = 1280
 SCREEN_H = 720
 FPS      = 60
-TITLE    = "Blind Driving Survival"
+TITLE    = "Inner Noise — Sage & Brute"
 
 # ---- ワールド ----
-WORLD_W  = 4000   # ワールド全体の幅 (px)
-WORLD_H  = 4000   # ワールド全体の高さ (px)
-TILE     = 8      # 地形サンプリング解像度 (px)
+WORLD_W  = 4000
+WORLD_H  = 4000
+TILE     = 8
 
 # ---- 地形生成 ----
 TERRAIN_OCTAVES    = 6
-TERRAIN_SCALE      = 0.0015   # パーリンノイズのスケール
-MOUNTAIN_THRESHOLD = 0.55     # この値以上を「山」とみなす
-VALLEY_THRESHOLD   = 0.35     # この値以下を「谷」とみなす
-PEAK_HEIGHT        = 1.0      # 最大標高（正規化）
-PASS_WIDTH         = 120      # 峠（スリット）の幅 (px)
+TERRAIN_SCALE      = 0.0015
+MOUNTAIN_THRESHOLD = 0.55
+VALLEY_THRESHOLD   = 0.35
+PEAK_HEIGHT        = 1.0
+PASS_WIDTH         = 120
 
 # ---- 車の物理 ----
-CAR_MAX_SPEED      = 4.0      # px/frame
+CAR_MAX_SPEED      = 4.0
 CAR_ACCEL          = 0.18
 CAR_BRAKE          = 0.25
 CAR_FRICTION       = 0.08
-CAR_TURN_SPEED     = 2.8      # deg/frame
-CAR_SLOPE_DRAG     = 0.6      # 登坂時の追加摩擦係数
-CAR_FALL_DAMAGE    = 0.20     # 急勾配落下時のエネルギーダメージ
-SLOPE_DAMAGE_THRESH= 0.45     # この勾配を超えると落下ダメージ
+CAR_TURN_SPEED     = 2.8
+CAR_SLOPE_DRAG     = 0.6
+CAR_FALL_DAMAGE    = 0.20
+SLOPE_DAMAGE_THRESH= 0.45
 
-# ---- エネルギー（空腹） ----
-ENERGY_MAX         = 0.5      # 旧値(1.0)の半分（常に餅が逕迫した状態に）
-ENERGY_INIT        = 0.5      # 初期エネルギー = ENERGY_MAX
-ENERGY_DECAY_BASE  = 0.00150  # 毎フレームの基礎消費
-ENERGY_DECAY_CLIMB = 0.07000  # 登坂中の追加消費（勾配強度×この値）
-ENERGY_DECAY_IDLE  = 0.00300  # 停滞中の追加消費
-ENERGY_PER_FOOD    = 0.25     # 通常餅１個で回復するエネルギー
-ENERGY_PER_FOOD_HI = 0.55     # 高級餅（山の上）の回復量
-IDLE_SPEED_THRESH  = 0.3      # この速度以下を「停滞」とみなす
+# ---- エネルギー（旧・audio-phoneme互換） ----
+ENERGY_MAX         = 0.5
+ENERGY_INIT        = 0.5
+ENERGY_DECAY_BASE  = 0.00150
+ENERGY_DECAY_CLIMB = 0.07000
+ENERGY_DECAY_IDLE  = 0.00300
+ENERGY_PER_FOOD    = 0.25
+ENERGY_PER_FOOD_HI = 0.55
+IDLE_SPEED_THRESH  = 0.3
 
-# ---- 視野（感覚器官：餌探索） ----
-VISION_ANGLE_DEG   = 45.0     # 視野角（片側）
-VISION_RANGE       = WORLD_W / 10  # 視野距離 = マップ幅の1/10 = 400px
-VISION_RAYS        = 5        # 視野内のレイ数（観測ベクトルの次元に影響）
-FOCUS_RANGE        = 400.0    # 弁別視野（視線中央線上）の距離 (px)
+# ---- 視野 ----
+VISION_ANGLE_DEG   = 45.0
+VISION_RANGE       = WORLD_W / 10
+VISION_RAYS        = 5
+FOCUS_RANGE        = 400.0
 
-# ---- 餌（均一高密度配置） ----
-FOOD_COUNT         = 200      # フィールド上の餌の総数（旧値の約2.5倍）
-FOOD_RADIUS        = 12       # 餌の当たり判定半径 (px)
-FOOD_GRID_SPACING  = 200      # グリッド間隔 (px)—均一配置の基準
-FOOD_JITTER        = 80       # グリッド位置のランダムジッター (px)
-FOOD_MOUNTAIN_THRESH = MOUNTAIN_THRESHOLD + 0.1  # この高さ以上に高級餌が出現
-FOOD_SEED          = 12345    # 餌配置用の固定シード（地形と分離）
-# PASS_REWARD は撤去（峰ボーナスエリアは均一配置に包含される）
+# ---- 餌（旧・audio-phoneme互換） ----
+FOOD_COUNT         = 200
+FOOD_RADIUS        = 12
+FOOD_GRID_SPACING  = 200
+FOOD_JITTER        = 80
+FOOD_MOUNTAIN_THRESH = MOUNTAIN_THRESHOLD + 0.1
+FOOD_SEED          = 12345
 
 # ---- ゴール ----
-GOAL_RADIUS        = 60       # ゴール判定半径 (px)
+GOAL_RADIUS        = 60
 
-# ---- ボトルネック通信路 ----
-BN_PARAMS          = 2        # パラメータ数（2 bits = 母音のみ）
+# ---- ボトルネック通信路（旧・audio-phoneme互換） ----
+BN_PARAMS          = 2
+BN_HZ              = 10
+BN_TURN_SEC        = 2
+BN_PULSES_PER_TURN = int(BN_HZ * BN_TURN_SEC)
+TURN_FRAMES        = int(BN_TURN_SEC * FPS)
+PULSE_TOTAL        = BN_PULSES_PER_TURN
+PULSE_GEN_INTERVAL = FPS // BN_HZ
+PULSE_CONSUME_RATE = PULSE_GEN_INTERVAL
+PIPELINE_OFFSET    = PULSE_GEN_INTERVAL
 
-# ---- パイプライン型半双方向通信（一元管理） ----
-# 変更する場合は下記の「基本定数」3つのみ編集すること。
-# 派生定数は自動計算される。
-
-# 基本定数（ここだけ編集する）
-BN_HZ              = 10       # パルス周波数（10Hz）
-BN_TURN_SEC        = 2        # 傾聴/発話ターン長 (秒)
-
-# 派生定数（自動計算・編集不要）
-BN_PULSES_PER_TURN = int(BN_HZ * BN_TURN_SEC)          # 1ターンのパルス数 = 20
-TURN_FRAMES        = int(BN_TURN_SEC * FPS)             # 1ターンのフレーム数 = 120
-PULSE_TOTAL        = BN_PULSES_PER_TURN                 # 別名（一致保証） = 20
-PULSE_GEN_INTERVAL = FPS // BN_HZ                      # 生成間隔 = 6フレーム
-PULSE_CONSUME_RATE = PULSE_GEN_INTERVAL                # 消化間隔 = 生成と同周期 = 6
-PIPELINE_OFFSET    = PULSE_GEN_INTERVAL                # 消化は生成の1周期後 = 6
-
-# ---- RNNボトルネックアーキテクチャ（バッファGRU挿入型・対称構造） ----
-SENSORY_INPUT_DIM  = 6 + VISION_RAYS + 1  # = 12（obsベクトル全次元）
-
-# 共通アーキテクチャ定数（センサリー/モーター共通）v2仕様
-L3_OUT_DIM         = 24       # 第三層FF出力次元（24）
-L3_NORMAL_DIM      = 12       # 第三層通常ノード（12）
-L3_BUFFER_DIM      = 12       # 第三層バッファノード（12）
-BUF_GRU_DIM        = 5        # バッファGRU隠れ次元（5）
-MEM_GRU_DIM        = 12       # 記憶GRU隠れ次元（12）
-GRU_INHERIT_DIM    = 6        # GRU継承領域（上位6次元）
-GRU_EPISODE_DIM    = 6        # GRU非継承領域（下位6次元）
-BYPASS_FF_DIM      = 16       # 通常FF出力次元（16）
-L1_IN_DIM          = MEM_GRU_DIM + BYPASS_FF_DIM  # = 28
-L1_OUT_DIM         = 24       # 第一層FF（統合層）出力次元（24）
-SENSORY_ENCODE_DIM = 2        # パルス符号化FF出力（2bits）
-MOTOR_OUTPUT_DIM   = 3        # 出力FF（Accel/Steer/Brake）
-
-# 互換性維持用エイリアス（旧定数名→新定数名）
+# ---- RNNアーキテクチャ（旧・audio-phoneme互換） ----
+SENSORY_INPUT_DIM  = 6 + VISION_RAYS + 1
+L3_OUT_DIM         = 24
+L3_NORMAL_DIM      = 12
+L3_BUFFER_DIM      = 12
+BUF_GRU_DIM        = 5
+MEM_GRU_DIM        = 12
+GRU_INHERIT_DIM    = 6
+GRU_EPISODE_DIM    = 6
+BYPASS_FF_DIM      = 16
+L1_IN_DIM          = MEM_GRU_DIM + BYPASS_FF_DIM
+L1_OUT_DIM         = 24
+SENSORY_ENCODE_DIM = 2
+MOTOR_OUTPUT_DIM   = 3
 SENSORY_FF_DIM     = L3_OUT_DIM
 SENSORY_GRU_DIM    = MEM_GRU_DIM
 SENSORY_INTEG_DIM  = L1_OUT_DIM
@@ -105,25 +93,25 @@ MOTOR_GRU_DIM      = MEM_GRU_DIM
 MOTOR_INTEG_DIM    = L1_OUT_DIM
 MOTOR_CORTEX_DIM   = L1_OUT_DIM
 
-# ---- 報酬 ----
+# ---- 報酬（旧・audio-phoneme互換） ----
 REWARD_GOAL        = 1000.0
 REWARD_FOOD        = 5.0
-REWARD_FOOD_HI     = 20.0     # 高級餌（山の上）の報酬
-REWARD_GOAL_STEP   = 0.01     # ゴールに近づくごとの微小報酬
-REWARD_MOVE        = 0.003    # 毎フレームの前進報酬（速度に比例）
-REWARD_SURVIVE     = 0.002    # 毎フレームの生存報酬
+REWARD_FOOD_HI     = 20.0
+REWARD_GOAL_STEP   = 0.01
+REWARD_MOVE        = 0.003
+REWARD_SURVIVE     = 0.002
 PENALTY_DEATH      = -500.0
 PENALTY_FALL       = -10.0
-COMPLEXITY_ALPHA   = 0.1      # NEATノード/エッジペナルティ係数
+COMPLEXITY_ALPHA   = 0.1
 
-# ---- GA ----
-GA_POP_SIZE        = 50       # 個体数
-GA_ELITE           = 20       # エリート個体数
+# ---- GA（旧・audio-phoneme互換） ----
+GA_POP_SIZE        = 50
+GA_ELITE           = 20
 GA_MUTATION_RATE   = 0.15
 GA_MUTATION_STD    = 0.3
-GA_EPISODE_FRAMES  = 0        # 0 = 時間制限なし（全員餐死まで）
+GA_EPISODE_FRAMES  = 0
 
-# ---- カラーパレット ----
+# ---- カラーパレット（旧・audio-phoneme互換） ----
 C_BG           = (10,  12,  20)
 C_MOUNTAIN     = (80,  70,  60)
 C_VALLEY       = (30,  55,  35)
@@ -143,61 +131,131 @@ C_WHITE        = (255, 255, 255)
 C_GRAY         = (120, 120, 120)
 C_DARK         = (30,   30,  40)
 
-# ---- 音素テーブル（2bits = 母音のみ） ----
-# 子音は使用しない。将来の変更はここを編集するだけでよい。
-
+# ---- 音素テーブル（audio-phoneme維持） ----
 PHONEME_VOWEL = {
-    0b00: 'u',   # う（F1低・F2低）
-    0b01: 'i',   # い（F1低・F2高）
-    0b10: 'o',   # お（F1中・F2低）
-    0b11: 'a',   # あ（F1高・F2中）
+    0b00: 'u',
+    0b01: 'i',
+    0b10: 'o',
+    0b11: 'a',
 }
-
-# 母音フォルマント周波数 (Hz)
-# 1オクターブ下げ実装（ピッチを人の耳に聴き取りやすい帯域に調整）
 PHONEME_FORMANTS = {
-    'a': (400,   600),   # あ
-    'i': (150,  1150),   # い
-    'u': (150,   400),   # う
-    'o': (250,   400),   # お
+    'a': (400,   600),
+    'i': (150,  1150),
+    'u': (150,   400),
+    'o': (250,   400),
 }
-
-# 2bits音素テーブル（表示用）
 PHONEME_TABLE = {
     0b00: 'う',
     0b01: 'い',
     0b10: 'お',
     0b11: 'あ',
 }
+AUDIO_SAMPLE_RATE   = 22050
+AUDIO_FRAME_MS      = 200
+AUDIO_FRAME_SAMPLES = int(AUDIO_SAMPLE_RATE * AUDIO_FRAME_MS / 1000)
+PITCH_FACTOR_HIGH   = 0.7
+PITCH_FACTOR_LOW    = 0.35
+VOWEL_F2F1_I        = 6.0
+VOWEL_F1_A          = 650
+VOWEL_F2_U          = 1200
 
-# 音声合成パラメータ
-AUDIO_SAMPLE_RATE   = 22050   # Hz
-AUDIO_FRAME_MS      = 200     # ms（5Hzパルスに同期）
-AUDIO_FRAME_SAMPLES = int(AUDIO_SAMPLE_RATE * AUDIO_FRAME_MS / 1000)  # = 4410
+# =============================================================
+# ---- SAGE-BRUTE 追加定数 ----
+# =============================================================
 
-# S↔M方向別ピッチ係数
-# ベースピッチからのオクターブ調整：
-#   1オクターブ上 = ×2.0
-#   半オクターブ上 = ×√2 ≈ ×1.414
-#   現在のベース（男性）: 0.35  → 1オクターブ上 = 0.35 × 2.0 = 0.70
-#   現在のベース（女性）: 0.70  → 半オクターブ上 = 0.70 × 1.414 ≈ 0.99
-PITCH_FACTOR_HIGH   = 0.99   # S→M（感覚→運動 / 傘聴ターン）← 女性：旧値×√2
-PITCH_FACTOR_LOW    = 0.70   # M→S（運動→感覚 / 発話ターン）← 男性：旧値×2.0
+# ワールド（SAGE-BRUTE用エイリアス）
+FIELD_SIZE   = 4000
+TERRAIN_SEED = 42
+BIOME_THRESHOLDS = (0.33, 0.66)
 
-# F1/F2ベース母音分類閾値
-# 学術データ（Mokhtari & Tanaka 2000、日本語母音コーパス）に基づく
-#
-# 実測平均値（男性成人）:
-#   い: F1=283Hz  F2=2353Hz  F2/F1=8.3
-#   あ: F1=801Hz  F2=1159Hz  F2/F1=1.4
-#   お: F1=503Hz  F2= 811Hz  F2/F1=1.6
-#   う: F1=405Hz  F2=1550Hz  F2/F1=3.8
-#
-# 判定ツリー:
-#   F2/F1 > 6.0  → い  (実測8.3、次点のう3.8と明確に分離)
-#   F1 > 650Hz   → あ  (実測801Hz、次点のお503Hzと150Hz以上の差)
-#   F2 > 1200Hz  → う  (実測1550Hz、お811Hzと700Hz以上の差)
-#   else         → お
-VOWEL_F2F1_I        = 6.0     # い の判定閾値（F2/F1比）
-VOWEL_F1_A          = 650     # あ の判定閾値（F1 Hz）
-VOWEL_F2_U          = 1200    # う の判定閾値（F2 Hz）← 旧値900Hzは誤り
+# エネルギー（SAGE-BRUTE用）
+MAX_ENERGY   = 100.0
+INIT_ENERGY  = 100.0
+ENERGY_DECAY = 100.0 / 3000
+ENERGY_NORMAL  = 8.0
+ENERGY_PREMIUM = 20.0
+ENERGY_ROTTEN  = -40.0
+ENERGY_TOXIC   = -30.0
+ENERGY_GOAL    = 15.0
+
+# キノコ
+MUSHROOM_DENSITY  = 0.015
+ROT_PROBABILITY   = 0.3
+TOXIC_COUNT       = 3
+HISTORY_LEN       = 5
+MUSHROOM_RADIUS   = 12
+
+MUSHROOM_SPECIES = {
+    ('W','normal', 1): 8.0,
+    ('W','normal', 2): 8.0,
+    ('W','premium',1): 20.0,
+    ('W','premium',2): 20.0,
+    ('G','normal', 1): 8.0,
+    ('G','normal', 2): 8.0,
+    ('G','premium',1): 20.0,
+    ('G','premium',2): 20.0,
+    ('M','normal', 1): 8.0,
+    ('M','normal', 2): 8.0,
+    ('M','premium',1): 20.0,
+    ('M','premium',2): 20.0,
+}
+MUSHROOM_SPECIES_LIST = list(MUSHROOM_SPECIES.keys())
+NUM_SPECIES = len(MUSHROOM_SPECIES_LIST)  # = 12
+
+# 通信バス（SAGE-BRUTE用オーバーライド）
+PULSE_BITS         = 2
+# PULSE_GEN_INTERVAL, PULSE_CONSUME_RATE, TURN_FRAMES, PULSE_TOTAL は旧定数を流用
+
+# GA（SAGE-BRUTE用）
+ELITE_SIZE       = 4
+MUTATE_RATE_INIT = 0.1
+MUTATE_STD_INIT  = 0.3
+
+# SAGE NN次元
+MUSHROOM_ENC_DIM = 6
+SAGE_OBS_DIM     = 11
+SAGE_L3_OUT      = 24
+SAGE_L3_NORMAL   = 12
+SAGE_L3_BUF      = 12
+SAGE_BUF_DIM     = 5
+SAGE_MEM_DIM     = 12
+SAGE_MEM_INHERIT = 6
+SAGE_BYPASS_OUT  = 16
+SAGE_L1_IN       = 28
+SAGE_L1_OUT      = 24
+SAGE_ENCODE_DIM  = 2
+
+# BRUTE NN次元
+BRUTE_OBS_DIM     = 11
+BRUTE_L3_OUT      = 24
+BRUTE_L3_NORMAL   = 12
+BRUTE_L3_BUF      = 12
+BRUTE_BUF_DIM     = 5
+BRUTE_MEM_DIM     = 12
+BRUTE_MEM_INHERIT = 6
+BRUTE_BYPASS_OUT  = 16
+BRUTE_L1_IN       = 28
+BRUTE_L1_OUT      = 24
+BRUTE_ACTION_DIM  = 3
+BRUTE_ENCODE_DIM  = 2
+
+# 報酬（SAGE-BRUTE用）
+REWARD_GOAL_SB   = 15.0
+REWARD_FOOD_SB   = 8.0
+REWARD_FOOD_HI_SB = 20.0
+
+# バイオーム色
+BIOME_COLORS = {
+    'W': (135, 206, 235),
+    'G': (245, 240, 220),
+    'M': ( 34,  85,  34),
+}
+
+# パルス配色
+PULSE_COLOR_S_TO_B = (255, 180,  50)
+PULSE_COLOR_B_TO_S = ( 80, 180, 255)
+PULSE_COLOR_OFF    = ( 60,  60,  60)
+
+# 色定数（SAGE-BRUTE用追加）
+C_FOOD_ROT  = ( 80,  60,  20)
+C_FOOD_HI   = (255, 140,  20)
