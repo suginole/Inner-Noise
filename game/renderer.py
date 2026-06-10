@@ -551,14 +551,15 @@ class Renderer:
         self.screen.blit(sub, (SCREEN_W // 2 - sub.get_width() // 2, 220))
 
         options = [
-            ("1", "PLAYER MODE",     "キーボードで車を直接操作する",                         C_CAR),
+            ("1", "PLAYER MODE",     "キーボードで車を直接操作する",                                   C_CAR),
+            ("H", "HACK MODE",       "BRUTE目線でプレイ／SAGE・通信バスは通常通り動作",  (100, 220, 255)),
             ("2", "GA MODE",         "遠伝的アルゴリズムの学習を観察する",                   C_CAR_GA),
             ("3", "FAST LEARN MODE", "描画スキップの高速学習モード（Tabで監視切替）",   (255, 200, 50)),
-            ("L", "LOAD MODEL",      "保存済みモデルをロードする",                         (180, 140, 220)),
-            ("O", "BACKROOM MODE",   "音声入出力確認・デバッグモード",                   (255, 120, 180)),
+            ("L", "LOAD MODEL",      "保存済みモデルをロードする",                                 (180, 140, 220)),
+            ("O", "BACKROOM MODE",   "音声入出力確認・デバッグモード",                             (255, 120, 180)),
         ]
         for i, (key, name, desc, color) in enumerate(options):
-            oy = 270 + i * 82   # 5項目に収まるよう間隔を縮小
+            oy = 270 + i * 72   # 6項目に収まるよう間隔を縮小
             pygame.draw.rect(self.screen, (20, 22, 35),
                              (SCREEN_W // 2 - 280, oy, 560, 68), border_radius=8)
             pygame.draw.rect(self.screen, color,
