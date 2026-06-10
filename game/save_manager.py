@@ -139,6 +139,21 @@ def load_model(record_id: int, ga):
         g = GAGenome.from_flat(np.array(flat_list, dtype=np.float32))
         new_pop.append(g)
 
+    # ga.pop_sizeとサイズが違う場合は調整する
+    target = ga.pop_size
+    if len(new_pop) < target:
+        # 不足分はエリートを繰り返して補充
+        rng_fill = np.random.default_rng(42)
+        while len(new_pop) < target:
+            src = new_pop[rng_fill.integers(0, min(len(new_pop), 4))]
+            child = GAGenome.from_flat(src.flat().copy())
+            child.fitness = 0.0
+            new_pop.append(child)
+    elif len(new_pop) > target:
+        # 割り捨て（適応度順に上位のみ残す）
+        new_pop.sort(key=lambda g: g.fitness, reverse=True)
+        new_pop = new_pop[:target]
+
     ga.population = new_pop
     ga.generation = data["generation"]
     ga.mut_rate   = data["mut_rate"]
