@@ -183,34 +183,50 @@ class Renderer:
             obs_arr = list(obs)
         else:
             obs_arr = [0.0] * SAGE_OBS_DIM
-        obs_labels = [f"S{i}" for i in range(12)] + ["Ga", "Gd", "En", "P0", "P1"]
+        obs_labels = [
+            "Biome-W", "Biome-G", "Biome-M",  # [0:3] マスク（常に0）
+            "Grade",                            # [3]   栄養価
+            "Variant",                          # [4]   バリアント
+            "Rot",                              # [5]   マスク（常に0）
+            "GoalAng",                          # [6]   ゴール角度
+            "GoalDist",                         # [7]   ゴール距離
+            "Energy",                           # [8]   エネルギー
+            "Pulse-0",                          # [9]   受信パルスbit0
+            "Pulse-1",                          # [10]  受信パルスbit1
+        ]
+        sage_mask_idx = {0, 1, 2, 5}   # 常に0固定のインデックス
         n_obs = len(obs_arr)
         sy_obs = row_top + max(0, (h - 28 - n_obs * node_gap) // 2)
         for i, v in enumerate(obs_arr):
             ny = sy_obs + i * node_gap
-            if i < 12:   # 弁別視野: 0=暗・1=明緑
+            if i < 3:    # バイオーム（マスク）
+                c = (20, 20, 20); border = (40, 40, 60)
+            elif i == 3:  # 栄養価: 0=暗・1=明緑
                 t = max(0.0, min(1.0, float(v)))
-                c = (int(20 + 200*t), int(20 + 200*t), 20)
-                border = (60, 120, 60)
-            elif i == 12:  # ゴール角度: 負=左(青)・正=右(赤)
+                c = (int(20+200*t), int(20+200*t), 20); border = (60, 120, 60)
+            elif i == 4:  # バリアント
+                t = max(0.0, min(1.0, float(v)))
+                c = (int(20+200*t), int(20+200*t), 20); border = (60, 120, 60)
+            elif i == 5:  # 腐敗（マスク）
+                c = (20, 20, 20); border = (40, 40, 60)
+            elif i == 6:  # ゴール角度
                 t = min(1.0, abs(float(v)))
                 c = (int(40+180*t), 40, 40) if float(v) >= 0 else (40, 40, int(40+180*t))
                 border = (100, 100, 100)
-            elif i == 13:  # ゴール距離: 0=短(暗)・1=長(明)
+            elif i == 7:  # ゴール距離
                 t = max(0.0, min(1.0, float(v)))
-                c = (int(20+200*t), int(20+200*t), int(20+200*t))
-                border = (100, 100, 100)
-            elif i == 14:  # エネルギー: 高=緑・低=赤
+                c = (int(20+200*t), int(20+200*t), int(20+200*t)); border = (100, 100, 100)
+            elif i == 8:  # エネルギー
                 t = max(0.0, min(1.0, float(v)))
-                c = (int(220*(1-t)), int(220*t), 20)
-                border = (100, 100, 100)
-            else:          # 受信パルス: ON=青・OFF=暗
+                c = (int(220*(1-t)), int(220*t), 20); border = (100, 100, 100)
+            else:          # 受信パルス
                 c = (80, 160, 255) if float(v) > 0.5 else (40, 40, 60)
                 border = (80, 120, 200)
             pygame.draw.circle(self.screen, c, (col_obs, ny), node_r)
             pygame.draw.circle(self.screen, border, (col_obs, ny), node_r, 1)
             if i < len(obs_labels):
-                lt = self.font_s.render(obs_labels[i], True, (60, 90, 140))
+                lc = (40, 40, 60) if i in sage_mask_idx else (60, 90, 140)
+                lt = self.font_s.render(obs_labels[i], True, lc)
                 self.screen.blit(lt, (col_obs - node_r - lt.get_width() - 1, ny - 5))
 
         # ---- 列2: 第三層FF (24次元・通常/バッファ区切り) ----
@@ -308,31 +324,43 @@ class Renderer:
             obs_arr = list(obs)
         else:
             obs_arr = [0.0] * BRUTE_OBS_DIM
-        obs_labels = [f"R{i}" for i in range(5)] + ["Bw", "Bg", "Bm", "Rot", "P0", "P1"]
+        obs_labels = [
+            "Biome-W", "Biome-G", "Biome-M",  # [0:3] バイオーム
+            "Grade",                            # [3]   マスク（常に0）
+            "Variant",                          # [4]   マスク（常に0）
+            "Rot",                              # [5]   腐敗
+            "Ray-0", "Ray-1", "Ray-2",         # [6:9] 視覚レイ
+            "Ray-3", "Ray-4",                  # [9:11]視覚レイ続き
+        ]
+        brute_mask_idx = {3, 4}   # 常に0固定のインデックス
         n_obs = len(obs_arr)
         sy_obs = row_top + max(0, (h - 28 - n_obs * node_gap) // 2)
         for i, v in enumerate(obs_arr):
             ny = sy_obs + i * node_gap
-            if i < 5:    # 視覚レイ: 0=暗・1=明緑
-                t = max(0.0, min(1.0, float(v)))
-                c = (int(20+200*t), int(20+200*t), 20)
-                border = (60, 120, 60)
-            elif i < 8:  # バイオームone-hot: バイオーム色
+            if i < 3:    # バイオームone-hot: バイオーム色
                 biome_keys = ['W', 'G', 'M']
-                bc = BIOME_COLORS.get(biome_keys[i-5], C_GRAY)
+                bc = BIOME_COLORS.get(biome_keys[i], C_GRAY)
                 t = max(0.0, min(1.0, float(v)))
                 c = tuple(int(cc * t + 20 * (1-t)) for cc in bc)
                 border = bc
-            elif i == 8:  # 腐敗: ON=赤・OFF=暗
+            elif i == 3:  # 栄養価（マスク）
+                c = (20, 20, 20); border = (50, 35, 35)
+            elif i == 4:  # バリアント（マスク）
+                c = (20, 20, 20); border = (50, 35, 35)
+            elif i == 5:  # 腐敗: ON=赤・OFF=暗
                 c = (220, 60, 60) if float(v) > 0.5 else (40, 40, 60)
                 border = (180, 60, 60)
-            else:          # 受信パルス: ON=青・OFF=暗
-                c = (80, 160, 255) if float(v) > 0.5 else (40, 40, 60)
-                border = (80, 120, 200)
+            elif i < 9:   # 視覚レイ[0:3]: 0=暗・1=明緑
+                t = max(0.0, min(1.0, float(v)))
+                c = (int(20+200*t), int(20+200*t), 20); border = (60, 120, 60)
+            else:          # 視覚レイ[3:5]
+                t = max(0.0, min(1.0, float(v)))
+                c = (int(20+200*t), int(20+200*t), 20); border = (60, 120, 60)
             pygame.draw.circle(self.screen, c, (col_obs, ny), node_r)
             pygame.draw.circle(self.screen, border, (col_obs, ny), node_r, 1)
             if i < len(obs_labels):
-                lt = self.font_s.render(obs_labels[i], True, (120, 60, 60))
+                lc = (50, 35, 35) if i in brute_mask_idx else (120, 60, 60)
+                lt = self.font_s.render(obs_labels[i], True, lc)
                 self.screen.blit(lt, (col_obs - node_r - lt.get_width() - 1, ny - 5))
 
         # ---- 列2: 第三層FF (24次元) ----
