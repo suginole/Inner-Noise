@@ -1,14 +1,15 @@
 """
-field.py — 地形生成・餌・ゴール管理
+field.py — キノコフィールド管理（Sage-Brute版）
 
-設計方針:
-  - 地形（hmap）は terrain_seed で完全固定。クラスレベルキャッシュにより
-    同じシードなら何度インスタンス化しても再計算しない。
-  - 餌はグリッドベース均一配置。food_episode（エピソード番号）ごとに
-    ジッターをかけて再配置する。
-  - 地形の高低に関わらず均等に分散（特定エリアへの偏りなし）。
-  - 高地（FOOD_MOUNTAIN_THRESH以上）に配置された餌は高級餌になる。
-  - 峰出口ボーナスエリアは撤去。
+キノコ設計:
+  12種（各バイオーム4種 × 3バイオーム）+ 腐敗フラグ
+  SAGEの弁別視野: 12種を識別可能・腐敗は識別不可
+  BRUTEの弁別視野: 腐敗のみ識別可能・12種は識別不可
+
+中毒・回復ルール:
+  中毒: 同一種を連続TOXIC_COUNT(3)回摂取で発症 (-30)
+  回復: 異なるバイオームの普通種2種を直近HISTORY_LEN(5)回内に揃えると回復
+  ゴール: ENERGY_GOAL(+15) + 摂取履歴リセット
 """
 import math
 import random
@@ -17,7 +18,7 @@ import pygame
 from config import *
 
 
-# ---- シンプルなパーリンノイズ実装 ----
+# ---- パーリンノイズ ----
 def _fade(t):
     return t * t * t * (t * (t * 6 - 15) + 10)
 
@@ -45,10 +46,8 @@ class PerlinNoise:
         yf = y - math.floor(y)
         u, v = _fade(xf), _fade(yf)
         p = self.perm
-        aa = p[p[xi]   + yi]
-        ab = p[p[xi]   + yi + 1]
-        ba = p[p[xi+1] + yi]
-        bb = p[p[xi+1] + yi + 1]
+        aa = p[p[xi]   + yi]; ab = p[p[xi]   + yi + 1]
+        ba = p[p[xi+1] + yi]; bb = p[p[xi+1] + yi + 1]
         return _lerp(
             _lerp(_grad(aa, xf,   yf),   _grad(ba, xf-1, yf),   u),
             _lerp(_grad(ab, xf,   yf-1), _grad(bb, xf-1, yf-1), u),
@@ -58,74 +57,68 @@ class PerlinNoise:
         val, amp, freq, mx = 0.0, 1.0, scale, 0.0
         for _ in range(octaves):
             val += self.noise(x * freq, y * freq) * amp
-            mx  += amp
-            amp *= persistence
-            freq *= 2.0
+            mx  += amp; amp *= persistence; freq *= 2.0
         return val / mx
 
 
+# ---- キノコエンティティ ----
+class Mushroom:
+    """フィールド上のキノコ1個。"""
+    __slots__ = ('pos', 'species_key', 'species_idx', 'biome', 'grade', 'is_rotten')
+
+    def __init__(self, pos: pygame.Vector2, species_key: tuple, species_idx: int, is_rotten: bool):
+        self.pos         = pos
+        self.species_key = species_key          # ('W', 'normal', 1) など
+        self.species_idx = species_idx          # 0〜11
+        self.biome       = species_key[0]       # 'W'/'G'/'M'
+        self.grade       = species_key[1]       # 'normal'/'premium'
+        self.is_rotten   = is_rotten
+
+
 class Field:
-    """ワールド全体の地形・餌・ゴールを管理する。
+    """ワールド全体の地形・キノコ・ゴールを管理する。"""
 
-    地形（hmap）は terrain_seed で完全固定。
-    餌はグリッドベース均一配置（food_episodeごとにジッターで再配置）。
-    foods の各要素は (Vector2, is_premium: bool) のタプル。
-    """
+    _terrain_cache: dict = {}
+    _surface_cache: dict = {}
+    _pass_cache:    dict = {}
 
-    # 地形はクラスレベルキャッシュ（同じシードなら再計算不要）
-    _terrain_cache: dict = {}   # terrain_seed -> hmap (np.ndarray)
-    _surface_cache: dict = {}   # terrain_seed -> pygame.Surface
-    _pass_cache:    dict = {}   # terrain_seed -> (pass_x, pass_y)  峰の中心座標
-
-    def __init__(self, terrain_seed: int = 42, food_episode: int = 0):
+    def __init__(self, terrain_seed: int = TERRAIN_SEED, food_episode: int = 0):
         self.terrain_seed = terrain_seed
         self.food_episode = food_episode
 
-        # ---- 地形（完全固定・キャッシュ） ----
         if terrain_seed not in Field._terrain_cache:
             Field._terrain_cache[terrain_seed] = self._build_terrain(terrain_seed)
-            # 峰の中心座標もキャッシュ
             pass_rng = random.Random(terrain_seed + 999)
             pass_y   = pass_rng.randint(int(WORLD_H * 0.3), int(WORLD_H * 0.7))
             Field._pass_cache[terrain_seed] = (WORLD_W // 2, pass_y)
 
-        self.hmap = Field._terrain_cache[terrain_seed]
+        self.hmap     = Field._terrain_cache[terrain_seed]
+        self.pass_pos = Field._pass_cache[terrain_seed]
 
-        # 峰の中心座標
-        self.pass_pos: tuple[int, int] = Field._pass_cache[terrain_seed]
-
-        # ---- スタート・ゴール位置（地形固定） ----
         self.start_pos = (WORLD_W * 0.15, WORLD_H * 0.5)
         self.goal_pos  = (WORLD_W * 0.85, WORLD_H * 0.5)
 
-        # ---- 餌の配置（エピソードごとに再配置） ----
-        self.foods: list[tuple[pygame.Vector2, bool]] = []
+        self.mushrooms: list[Mushroom] = []
         self._food_rng = random.Random(FOOD_SEED + food_episode)
-        self._place_foods()
+        self._place_mushrooms()
 
     # ----------------------------------------------------------------
     @staticmethod
     def _build_terrain(seed: int) -> np.ndarray:
-        """地形の高さマップを生成する（初回のみ）。"""
         pn   = PerlinNoise(seed)
         cols = WORLD_W // TILE
         rows = WORLD_H // TILE
         raw  = np.zeros((rows, cols), dtype=np.float32)
         for gy in range(rows):
             for gx in range(cols):
-                raw[gy, gx] = pn.octave(
-                    gx * TILE, gy * TILE,
-                    octaves=TERRAIN_OCTAVES,
-                    scale=TERRAIN_SCALE
-                )
+                raw[gy, gx] = pn.octave(gx * TILE, gy * TILE,
+                                         octaves=TERRAIN_OCTAVES, scale=TERRAIN_SCALE)
         lo, hi = raw.min(), raw.max()
         hmap = (raw - lo) / (hi - lo + 1e-8)
 
-        # 中央に山脈を追加（峠の位置もシードで固定）
         pass_rng = random.Random(seed + 999)
         pass_y   = pass_rng.randint(int(WORLD_H * 0.3), int(WORLD_H * 0.7))
-        cx       = WORLD_W // 2
-        ridge_w  = 80
+        cx = WORLD_W // 2; ridge_w = 80
         for gy in range(rows):
             wy = gy * TILE
             if abs(wy - pass_y) < PASS_WIDTH // 2:
@@ -138,23 +131,22 @@ class Field:
         return hmap
 
     # ----------------------------------------------------------------
-    def _place_foods(self):
-        """グリッドベース均一配置で餌を配置する。
+    def _biome_at(self, h: float) -> str:
+        """高さ値からバイオーム文字を返す。W=沼/G=平地/M=山"""
+        lo, hi = BIOME_THRESHOLDS
+        if h < lo:  return 'W'
+        if h < hi:  return 'G'
+        return 'M'
 
-        FOOD_GRID_SPACING 間隔のグリッド上に FOOD_JITTER のランダムジッターを
-        加えて配置する。地形の高低に関わらず均等に分散する。
-        高地（FOOD_MOUNTAIN_THRESH以上）に配置された餌は高級餌になる。
-        峰出口ボーナスエリアは撤去。
-        """
-        self.foods.clear()
+    def _place_mushrooms(self):
+        """グリッドベース均一配置でキノコを配置する。"""
+        self.mushrooms.clear()
         rng = self._food_rng
         margin = 100
 
-        # グリッド点を生成
         xs = list(range(margin, WORLD_W - margin, FOOD_GRID_SPACING))
         ys = list(range(margin, WORLD_H - margin, FOOD_GRID_SPACING))
 
-        # グリッド点にジッターを加えてシャッフル
         candidates = []
         for gx in xs:
             for gy in ys:
@@ -164,55 +156,60 @@ class Field:
                 cy = max(margin, min(WORLD_H - margin, gy + jy))
                 candidates.append((cx, cy))
 
-        # シャッフルして上位FOOD_COUNT個を採用
         rng.shuffle(candidates)
         for cx, cy in candidates[:FOOD_COUNT]:
             h = self.height_at(cx, cy)
-            is_premium = (h >= FOOD_MOUNTAIN_THRESH)
-            self.foods.append((pygame.Vector2(cx, cy), is_premium))
+            biome = self._biome_at(h)
+            # バイオームに合った種を選択
+            biome_species = [k for k in MUSHROOM_SPECIES_LIST if k[0] == biome]
+            species_key = rng.choice(biome_species)
+            species_idx = MUSHROOM_SPECIES_LIST.index(species_key)
+            is_rotten   = (rng.random() < ROT_PROBABILITY)
+            self.mushrooms.append(
+                Mushroom(pygame.Vector2(cx, cy), species_key, species_idx, is_rotten)
+            )
 
     def reset_foods(self, food_episode: int | None = None):
-        """餌をリセットして再配置する（エピソード開始時に呼ぶ）。"""
         if food_episode is not None:
             self.food_episode = food_episode
         self._food_rng = random.Random(FOOD_SEED + self.food_episode)
-        self._place_foods()
+        self._place_mushrooms()
 
     def clone_foods(self) -> 'Field':
-        """現在の餌配置をコピーした独立なFieldインスタンスを返す。
-
-        GA評価時に各エージェントに渡すことで、
-        他のエージェントの餌取得に影響されず独立した取得状況を保証する。
-        地形（hmap）・スタート・ゴール・峰座標は共有（変更なし）。
-        餌リストのみディープコピーする。
-        """
+        """各エージェント用の独立したフィールドコピーを返す。"""
         clone = Field.__new__(Field)
-        # 地形・座標は元インスタンスと共有（読み取り専用なので安全）
         clone.terrain_seed = self.terrain_seed
         clone.food_episode = self.food_episode
         clone.hmap         = self.hmap
         clone.pass_pos     = self.pass_pos
         clone.start_pos    = self.start_pos
         clone.goal_pos     = self.goal_pos
-        # 餌リストはディープコピー（各エージェントが独立に取得・削除できる）
-        clone.foods = [(pygame.Vector2(pos), is_p) for pos, is_p in self.foods]
-        # 餌補充用RNGは同じシードから再生成（補充順序が元と同じになる）
+        clone.mushrooms    = [
+            Mushroom(pygame.Vector2(m.pos), m.species_key, m.species_idx, m.is_rotten)
+            for m in self.mushrooms
+        ]
         clone._food_rng = random.Random(FOOD_SEED + self.food_episode)
         return clone
 
     # ----------------------------------------------------------------
     def height_at(self, wx: float, wy: float) -> float:
-        gx = int(wx / TILE)
-        gy = int(wy / TILE)
-        gx = max(0, min(gx, self.hmap.shape[1] - 1))
-        gy = max(0, min(gy, self.hmap.shape[0] - 1))
+        gx = max(0, min(int(wx / TILE), self.hmap.shape[1] - 1))
+        gy = max(0, min(int(wy / TILE), self.hmap.shape[0] - 1))
         return float(self.hmap[gy, gx])
 
     def gradient_at(self, wx: float, wy: float) -> tuple[float, float]:
         d = float(TILE)
-        dh_x = (self.height_at(wx + d, wy) - self.height_at(wx - d, wy)) / (2 * d)
-        dh_y = (self.height_at(wx, wy + d) - self.height_at(wx, wy - d)) / (2 * d)
-        return dh_x, dh_y
+        return ((self.height_at(wx + d, wy) - self.height_at(wx - d, wy)) / (2 * d),
+                (self.height_at(wx, wy + d) - self.height_at(wx, wy - d)) / (2 * d))
+
+    def biome_at(self, wx: float, wy: float) -> str:
+        return self._biome_at(self.height_at(wx, wy))
+
+    def biome_onehot(self, wx: float, wy: float) -> list[float]:
+        b = self.biome_at(wx, wy)
+        return [1.0 if b == 'W' else 0.0,
+                1.0 if b == 'G' else 0.0,
+                1.0 if b == 'M' else 0.0]
 
     def is_mountain(self, wx: float, wy: float) -> bool:
         return self.height_at(wx, wy) >= MOUNTAIN_THRESHOLD
@@ -221,76 +218,84 @@ class Field:
         return self.height_at(wx, wy) <= VALLEY_THRESHOLD
 
     # ----------------------------------------------------------------
-    def collect_food(self, wx: float, wy: float) -> tuple[bool, bool]:
-        """指定座標付近の餌を回収する。
-        Returns: (collected: bool, is_premium: bool)
-        """
+    def collect_mushroom(self, wx: float, wy: float) -> Mushroom | None:
+        """指定座標付近のキノコを回収して返す。なければNone。"""
         pos = pygame.Vector2(wx, wy)
-        for i, (food_pos, is_premium) in enumerate(self.foods):
-            if pos.distance_to(food_pos) < FOOD_RADIUS:
-                self.foods.pop(i)
-                return True, is_premium
-        return False, False
+        for i, m in enumerate(self.mushrooms):
+            if pos.distance_to(m.pos) < MUSHROOM_RADIUS:
+                return self.mushrooms.pop(i)
+        return None
 
-    def respawn_food(self):
-        """餌を1個補充する（グリッドベースのランダム位置）。"""
+    def nearest_mushroom(self, wx: float, wy: float) -> Mushroom | None:
+        """最寄りのキノコを返す（当たり判定外でも）。"""
+        if not self.mushrooms:
+            return None
+        pos = pygame.Vector2(wx, wy)
+        return min(self.mushrooms, key=lambda m: pos.distance_to(m.pos))
+
+    def mushroom_in_focus(self, wx: float, wy: float, angle_deg: float,
+                          focus_range: float = FOCUS_RANGE) -> Mushroom | None:
+        """弁別視野（正面直線上）にあるキノコを返す。"""
+        if not self.mushrooms:
+            return None
+        pos = pygame.Vector2(wx, wy)
+        angle_rad = math.radians(angle_deg)
+        forward   = pygame.Vector2(math.cos(angle_rad), math.sin(angle_rad))
+        best, best_d = None, focus_range
+        for m in self.mushrooms:
+            diff = m.pos - pos
+            d    = diff.length()
+            if d > focus_range or d < 1e-6:
+                continue
+            dot = diff.normalize().dot(forward)
+            if dot > 0.97:   # ±約14度以内
+                if d < best_d:
+                    best, best_d = m, d
+        return best
+
+    def respawn_mushroom(self):
+        """キノコを1個補充する。"""
         rng = self._food_rng
         margin = 100
-        for _ in range(50):
-            x = rng.uniform(margin, WORLD_W - margin)
-            y = rng.uniform(margin, WORLD_H - margin)
-            h = self.height_at(x, y)
-            is_premium = (h >= FOOD_MOUNTAIN_THRESH)
-            self.foods.append((pygame.Vector2(x, y), is_premium))
-            return
+        x = rng.uniform(margin, WORLD_W - margin)
+        y = rng.uniform(margin, WORLD_H - margin)
+        h = self.height_at(x, y)
+        biome = self._biome_at(h)
+        biome_species = [k for k in MUSHROOM_SPECIES_LIST if k[0] == biome]
+        species_key = rng.choice(biome_species)
+        species_idx = MUSHROOM_SPECIES_LIST.index(species_key)
+        is_rotten   = (rng.random() < ROT_PROBABILITY)
+        self.mushrooms.append(
+            Mushroom(pygame.Vector2(x, y), species_key, species_idx, is_rotten)
+        )
 
     # ----------------------------------------------------------------
     def get_surface(self) -> pygame.Surface:
-        """地形サーフェスを生成してキャッシュする（terrain_seedごとに1回のみ）。"""
         if self.terrain_seed in Field._surface_cache:
             return Field._surface_cache[self.terrain_seed]
 
-        import numpy as np
         rows, cols = self.hmap.shape
         rgb = np.zeros((rows, cols, 3), dtype=np.uint8)
         h = self.hmap
+        lo, hi = BIOME_THRESHOLDS
 
-        # 山地帯
-        mt_mask = h >= MOUNTAIN_THRESHOLD
-        t_mt = np.clip((h - MOUNTAIN_THRESHOLD) / (1.0 - MOUNTAIN_THRESHOLD + 1e-8), 0, 1)
-        rgb[mt_mask, 0] = (C_PLAIN[0] + (C_MOUNTAIN[0] - C_PLAIN[0]) * t_mt[mt_mask]).astype(np.uint8)
-        rgb[mt_mask, 1] = (C_PLAIN[1] + (C_MOUNTAIN[1] - C_PLAIN[1]) * t_mt[mt_mask]).astype(np.uint8)
-        rgb[mt_mask, 2] = (C_PLAIN[2] + (C_MOUNTAIN[2] - C_PLAIN[2]) * t_mt[mt_mask]).astype(np.uint8)
+        # 沼（W）
+        w_mask = h < lo
+        rgb[w_mask] = C_VALLEY
 
-        # 谷地帯
-        vl_mask = h <= VALLEY_THRESHOLD
-        t_vl = np.clip(1.0 - h / (VALLEY_THRESHOLD + 1e-8), 0, 1) * 0.5
-        c2 = (20, 40, 25)
-        rgb[vl_mask, 0] = (C_VALLEY[0] + (c2[0] - C_VALLEY[0]) * t_vl[vl_mask]).astype(np.uint8)
-        rgb[vl_mask, 1] = (C_VALLEY[1] + (c2[1] - C_VALLEY[1]) * t_vl[vl_mask]).astype(np.uint8)
-        rgb[vl_mask, 2] = (C_VALLEY[2] + (c2[2] - C_VALLEY[2]) * t_vl[vl_mask]).astype(np.uint8)
+        # 山（M）
+        m_mask = h >= hi
+        t_m = np.clip((h - hi) / (1.0 - hi + 1e-8), 0, 1)
+        for c in range(3):
+            rgb[m_mask, c] = (C_PLAIN[c] + (C_MOUNTAIN[c] - C_PLAIN[c]) * t_m[m_mask]).astype(np.uint8)
 
-        # 平地帯
-        pl_mask = ~mt_mask & ~vl_mask
-        t_pl = np.clip((h - VALLEY_THRESHOLD) / (MOUNTAIN_THRESHOLD - VALLEY_THRESHOLD + 1e-8), 0, 1)
-        rgb[pl_mask, 0] = (C_VALLEY[0] + (C_PLAIN[0] - C_VALLEY[0]) * t_pl[pl_mask]).astype(np.uint8)
-        rgb[pl_mask, 1] = (C_VALLEY[1] + (C_PLAIN[1] - C_VALLEY[1]) * t_pl[pl_mask]).astype(np.uint8)
-        rgb[pl_mask, 2] = (C_VALLEY[2] + (C_PLAIN[2] - C_VALLEY[2]) * t_pl[pl_mask]).astype(np.uint8)
+        # 平地（G）
+        g_mask = ~w_mask & ~m_mask
+        t_g = np.clip((h - lo) / (hi - lo + 1e-8), 0, 1)
+        for c in range(3):
+            rgb[g_mask, c] = (C_VALLEY[c] + (C_PLAIN[c] - C_VALLEY[c]) * t_g[g_mask]).astype(np.uint8)
 
-        # TILEサイズに拡大（numpy repeat）
         rgb_big = np.repeat(np.repeat(rgb, TILE, axis=0), TILE, axis=1)
-
-        # numpy配列から pygame.Surface へ変換
         surf = pygame.surfarray.make_surface(rgb_big.transpose(1, 0, 2))
-
         Field._surface_cache[self.terrain_seed] = surf
         return surf
-
-
-def _lerp_color(c1, c2, t):
-    t = max(0.0, min(1.0, t))
-    return (
-        int(c1[0] + (c2[0] - c1[0]) * t),
-        int(c1[1] + (c2[1] - c1[1]) * t),
-        int(c1[2] + (c2[2] - c1[2]) * t),
-    )

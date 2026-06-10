@@ -1,179 +1,281 @@
 """
-ga_agent.py — バッファGRU挿入型ゲノムを使ったGAエージェント
+ga_agent.py — GAゲノム管理・エージェント（Sage-Brute版）
 
-GAGenome: SensoryNN + MotorNN の全重みをフラットベクトルとして保持。
-  合計 2,729次元
+GAGenome: SageNN + BruteNN の全重みをフラットベクトルで保持。
+  合計 ≈ 5,415次元
 
-GAが進化させるもの:
-  - 第三層FF重み（W3, b3）
-  - バッファGRU重み（9行列）
-  - 記憶GRU重み（9行列）
-  - γ（記憶GRU上位6次元の初期値）
-  - 通常FF重み（W_bypass, b_bypass）
-  - 第一層FF重み（W1, b1）
-  - センサリー: パルス符号化FF重み（W_encode, b_encode）
-  - モーター: 出力FF重み（W_out, b_out）
-
-オンライン更新（GAが進化させない）:
-  - 記憶GRUの隠れ状態（エピソード内のみ）
-  - バッファGRUの隠れ状態・buf_out（エピソード内のみ）
+エピソード処理:
+  - 摂取履歴・中毒カウント・回復判定を管理
+  - SAGEとBRUTEの観測ベクトルを構築
+  - ボトルネック経由で行動を取得
 """
+import math
 import random
 import numpy as np
-from game.agent import Agent
-from game.car import Car
-from game.field import Field
-from game.rnn_bottleneck import SensoryNN, MotorNN, RNNBottleneck
+import pygame
 from config import *
-
-# 観測ベクトルの全次元
-OBS_DIM = 6 + VISION_RAYS + 1   # = 12
+from game.sage  import SageNN
+from game.brute import BruteNN
+from game.bottleneck import Bottleneck
+from game.field import Field, Mushroom
 
 
 # ================================================================
 class GAGenome:
-    """
-    バッファGRU挿入型ゲノム。
-    SensoryNN + MotorNN の全重みをフラットベクトルで保持する。
-    """
+    """SAGE + BRUTE の全重みをフラットベクトルで保持するゲノム。"""
 
     def __init__(self, rng: random.Random | None = None):
-        np_rng = np.random.default_rng(
-            rng.randint(0, 2**31) if rng else None
-        )
-        self.sensory = SensoryNN(rng=np_rng)
-        self.motor   = MotorNN(rng=np_rng)
-
+        np_rng = np.random.default_rng(rng.randint(0, 2**31) if rng else None)
+        self.sage  = SageNN(rng=np_rng)
+        self.brute = BruteNN(rng=np_rng)
         self.fitness:    float = 0.0
         self.species_id: int   = -1
 
-        # アクティベーション記録（可視化用）
-        self.last_input_act:        list[float] = [0.0] * OBS_DIM
-        self.last_l3_act:           list[float] = [0.0] * L3_OUT_DIM       # 第三層FF出力(24)
-        self.last_sensory_buf:      list[float] = [0.0] * BUF_GRU_DIM      # センサリーバッファGRU(5)
-        self.last_sensory_buf_active: bool = False
-        self.last_sensory_gru:      list[float] = [0.0] * MEM_GRU_DIM      # 感覚記憶GRU(12)
-        self.last_pulse_act:        list[int]   = [0, 0]                    # パルス符号化後
-        self.last_motor_l3_act:     list[float] = [0.0] * L3_OUT_DIM       # モーター第三層FF(24)
-        self.last_motor_buf:        list[float] = [0.0] * BUF_GRU_DIM      # モーターバッファGRU(5)
-        self.last_motor_buf_active: bool = False
-        self.last_motor_gru:        list[float] = [0.0] * MEM_GRU_DIM      # 運動記憶GRU(12)
-        self.last_output_act:       list[float] = [0.5, 0.5, 0.0]          # 出力
-        # 互換性維持用エイリアス（旧名→新名）
-        self.last_cortex_act:       list[float] = self.last_l3_act
-        self.last_sensory_integ:    list[float] = [0.0] * L1_OUT_DIM       # (24)
-        self.last_embed_act:        list[float] = self.last_motor_l3_act
-        self.last_motor_integ:      list[float] = [0.0] * L1_OUT_DIM       # (24)
-        self.last_motor_cortex_act: list[float] = [0.0] * L1_OUT_DIM       # (24)
-        self.last_hidden_act:       list[float] = self.last_l3_act
-        self.last_hidden2_act:      list[float] = self.last_sensory_gru
-
-    # ----------------------------------------------------------------
     def flat(self) -> np.ndarray:
-        return np.concatenate([self.sensory.flat(), self.motor.flat()])
+        return np.concatenate([self.sage.flat(), self.brute.flat()])
 
     @staticmethod
     def total_flat_size() -> int:
-        return SensoryNN.flat_size() + MotorNN.flat_size()
+        return SageNN.param_count() + BruteNN.param_count()
+
+    def load_flat(self, arr: np.ndarray):
+        n = SageNN.param_count()
+        self.sage.load_flat(arr[:n])
+        self.brute.load_flat(arr[n:])
+
+    def reset_episode(self):
+        self.sage.reset_episode()
+        self.brute.reset_episode()
 
     @staticmethod
-    def from_flat(v: np.ndarray) -> "GAGenome":
+    def from_flat(v: np.ndarray) -> 'GAGenome':
         g = GAGenome.__new__(GAGenome)
         g.fitness    = 0.0
         g.species_id = -1
-        g.last_input_act          = [0.0] * OBS_DIM
-        g.last_l3_act             = [0.0] * L3_OUT_DIM       # (24)
-        g.last_sensory_buf        = [0.0] * BUF_GRU_DIM      # (5)
-        g.last_sensory_buf_active = False
-        g.last_sensory_gru        = [0.0] * MEM_GRU_DIM      # (12)
-        g.last_pulse_act          = [0, 0]
-        g.last_motor_l3_act       = [0.0] * L3_OUT_DIM       # (24)
-        g.last_motor_buf          = [0.0] * BUF_GRU_DIM      # (5)
-        g.last_motor_buf_active   = False
-        g.last_motor_gru          = [0.0] * MEM_GRU_DIM      # (12)
-        g.last_output_act         = [0.5, 0.5, 0.0]
-        g.last_cortex_act         = g.last_l3_act
-        g.last_sensory_integ      = [0.0] * L1_OUT_DIM       # (24)
-        g.last_embed_act          = g.last_motor_l3_act
-        g.last_motor_integ        = [0.0] * L1_OUT_DIM       # (24)
-        g.last_motor_cortex_act   = [0.0] * L1_OUT_DIM       # (24)
-        g.last_hidden_act         = g.last_l3_act
-        g.last_hidden2_act        = g.last_sensory_gru
-
-        ss = SensoryNN.flat_size()
-
-        g.sensory = SensoryNN.__new__(SensoryNN)
-        g.sensory.last_l3_act      = [0.0] * L3_OUT_DIM      # (24)
-        g.sensory.last_buf_act     = [0.0] * BUF_GRU_DIM     # (5)
-        g.sensory.last_buf_active  = False
-        g.sensory.last_gru_act     = [0.0] * MEM_GRU_DIM     # (12)
-        g.sensory.last_bypass_act  = [0.0] * BYPASS_FF_DIM   # (16)
-        g.sensory.last_integ_act   = [0.0] * L1_OUT_DIM      # (24)
-        g.sensory.last_pulse       = [0, 0]
-        g.sensory.last_input_act   = g.sensory.last_l3_act
-        g.sensory.last_cortex_act  = g.sensory.last_l3_act
-        g.sensory._h_mem           = np.zeros(MEM_GRU_DIM)
-        g.sensory._h_buf           = np.zeros(BUF_GRU_DIM)
-        g.sensory._buf_out         = np.zeros(BUF_GRU_DIM)
-        g.sensory.gamma            = np.zeros(GRU_INHERIT_DIM)
-        g.sensory.load_flat(v[:ss])
-        g.sensory._h_mem           = g.sensory._init_h_mem()
-
-        g.motor = MotorNN.__new__(MotorNN)
-        g.motor.last_l3_act        = [0.0] * L3_OUT_DIM      # (24)
-        g.motor.last_buf_act       = [0.0] * BUF_GRU_DIM     # (5)
-        g.motor.last_buf_active    = False
-        g.motor.last_gru_act       = [0.0] * MEM_GRU_DIM     # (12)
-        g.motor.last_bypass_act    = [0.0] * BYPASS_FF_DIM   # (16)
-        g.motor.last_integ_act     = [0.0] * L1_OUT_DIM      # (24)
-        g.motor.last_output_act    = [0.5, 0.5, 0.0]
-        g.motor.last_embed_act     = g.motor.last_l3_act
-        g.motor.last_cortex_act    = g.motor.last_integ_act
-        g.motor._h_mem             = np.zeros(MEM_GRU_DIM)
-        g.motor._h_buf             = np.zeros(BUF_GRU_DIM)
-        g.motor._buf_out           = np.zeros(BUF_GRU_DIM)
-        g.motor.gamma              = np.zeros(GRU_INHERIT_DIM)
-        g.motor.load_flat(v[ss:])
-        g.motor._h_mem             = g.motor._init_h_mem()
+        g.sage  = SageNN.__new__(SageNN)
+        g.brute = BruteNN.__new__(BruteNN)
+        # 最小限の初期化
+        rng = np.random.default_rng(0)
+        tmp_s = SageNN(rng=rng)
+        tmp_b = BruteNN(rng=rng)
+        g.sage  = tmp_s
+        g.brute = tmp_b
+        g.load_flat(v)
         return g
 
-    # ----------------------------------------------------------------
-    def mutate(self, rate: float, std: float) -> "GAGenome":
+    def mutate(self, rate: float, std: float) -> 'GAGenome':
         v = self.flat().copy()
         mask = np.random.random(v.shape) < rate
         v[mask] += np.random.normal(0, std, mask.sum())
         return GAGenome.from_flat(v)
 
     @staticmethod
-    def crossover(a: "GAGenome", b: "GAGenome") -> "GAGenome":
+    def crossover(a: 'GAGenome', b: 'GAGenome') -> 'GAGenome':
         va, vb = a.flat(), b.flat()
         mask = np.random.random(va.shape) < 0.5
         return GAGenome.from_flat(np.where(mask, va, vb))
 
-    def distance(self, other: "GAGenome") -> float:
+    def distance(self, other: 'GAGenome') -> float:
         return float(np.linalg.norm(self.flat() - other.flat()))
 
-    def update_activations(self, bn, obs: list[float]):
-        """全層のアクティベーションをゲノムに同期する（可視化用）。"""
-        self.last_input_act          = list(obs)
-        self.last_l3_act             = list(getattr(bn.sensory, 'last_l3_act',      [0.0]*L3_OUT_DIM))
-        self.last_sensory_buf        = list(getattr(bn.sensory, 'last_buf_act',     [0.0]*BUF_GRU_DIM))
-        self.last_sensory_buf_active = bool(getattr(bn.sensory, 'last_buf_active',  False))
-        self.last_sensory_gru        = list(getattr(bn, 'last_sensory_gru',         [0.0]*MEM_GRU_DIM))
-        self.last_sensory_integ      = list(getattr(bn.sensory, 'last_integ_act',   [0.0]*L1_OUT_DIM))
-        self.last_pulse_act          = list(getattr(bn.sensory, 'last_pulse',       [0, 0]))
-        self.last_motor_l3_act       = list(getattr(bn.motor, 'last_l3_act',        [0.0]*L3_OUT_DIM))
-        self.last_motor_buf          = list(getattr(bn.motor, 'last_buf_act',       [0.0]*BUF_GRU_DIM))
-        self.last_motor_buf_active   = bool(getattr(bn.motor, 'last_buf_active',    False))
-        self.last_motor_gru          = list(getattr(bn, 'last_motor_gru',           [0.0]*MEM_GRU_DIM))
-        self.last_motor_integ        = list(getattr(bn.motor, 'last_integ_act',     [0.0]*L1_OUT_DIM))
-        self.last_motor_cortex_act   = list(getattr(bn.motor, 'last_integ_act',     [0.0]*L1_OUT_DIM))
-        self.last_output_act         = list(getattr(bn, 'last_output',              [0.5, 0.5, 0.0]))
-        # エイリアスも更新
-        self.last_cortex_act   = self.last_l3_act
-        self.last_embed_act    = self.last_motor_l3_act
-        self.last_hidden_act   = self.last_l3_act
-        self.last_hidden2_act  = self.last_sensory_gru
+
+# ================================================================
+class SageBruteAgent:
+    """1エピソードを実行するエージェント。"""
+
+    def __init__(self, genome: GAGenome, field: Field,
+                 start_pos: tuple[float, float]):
+        self.genome = genome
+        self.field  = field
+
+        # 車体状態
+        self.pos   = pygame.Vector2(*start_pos)
+        self.angle = 0.0   # 度
+        self.speed = 0.0
+        self.energy = INIT_ENERGY
+        self.alive  = True
+
+        # ボトルネック
+        self.bn = Bottleneck(genome.sage, genome.brute)
+        self.bn.reset(prefill=True)
+
+        # 摂取履歴・中毒管理
+        self.intake_history: list[tuple] = []   # (species_key,) 直近HISTORY_LEN個
+        self.toxic_count:    int = 0             # 同一種連続摂取カウント
+        self.last_species:   tuple | None = None
+        self.is_toxic:       bool = False        # 中毒状態
+
+        # スコア
+        self.total_reward:   float = 0.0
+        self.goal_count:     int   = 0
+        self.food_collected: int   = 0
+        self.frame:          int   = 0
+
+    def _build_sage_obs(self, received_pulse: int) -> np.ndarray:
+        """SAGE用観測ベクトル（17次元）を構築する。"""
+        # 弁別視野: 正面のキノコ12種one-hot
+        focus_m = self.field.mushroom_in_focus(self.pos.x, self.pos.y, self.angle)
+        species_onehot = [0.0] * NUM_SPECIES
+        if focus_m is not None and not focus_m.is_rotten:
+            species_onehot[focus_m.species_idx] = 1.0
+
+        # ゴール角度・距離
+        goal = pygame.Vector2(*self.field.goal_pos)
+        diff = goal - self.pos
+        dist_norm = min(1.0, diff.length() / (WORLD_W * 1.4))
+        angle_to_goal = math.atan2(diff.y, diff.x)
+        angle_diff = (math.radians(self.angle) - angle_to_goal + math.pi) % (2 * math.pi) - math.pi
+        angle_norm = angle_diff / math.pi
+
+        # エネルギー
+        energy_norm = max(0.0, min(1.0, self.energy / MAX_ENERGY))
+
+        # 受信パルス
+        p_bits = [float((received_pulse >> 1) & 1), float(received_pulse & 1)]
+
+        return np.array(species_onehot + [angle_norm, dist_norm, energy_norm] + p_bits,
+                        dtype=np.float32)
+
+    def _build_brute_obs(self, received_pulse: int) -> np.ndarray:
+        """BRUTE用観測ベクトル（11次元）を構築する。"""
+        # 視覚レイ（±45度5本）
+        rays = []
+        angle_rad = math.radians(self.angle)
+        for i in range(VISION_RAYS):
+            t = i / max(1, VISION_RAYS - 1)
+            ray_angle = angle_rad + math.radians(VISION_ANGLE_DEG * (2 * t - 1))
+            ray_val = 0.0
+            for step in range(1, int(VISION_RANGE / 20) + 1):
+                rx = self.pos.x + math.cos(ray_angle) * step * 20
+                ry = self.pos.y + math.sin(ray_angle) * step * 20
+                if not (0 <= rx < WORLD_W and 0 <= ry < WORLD_H):
+                    ray_val = step * 20 / VISION_RANGE
+                    break
+            rays.append(ray_val)
+
+        # バイオームone-hot
+        biome_oh = self.field.biome_onehot(self.pos.x, self.pos.y)
+
+        # 腐敗フラグ
+        focus_m = self.field.mushroom_in_focus(self.pos.x, self.pos.y, self.angle)
+        rot_flag = 1.0 if (focus_m is not None and focus_m.is_rotten) else 0.0
+
+        # 受信パルス
+        p_bits = [float((received_pulse >> 1) & 1), float(received_pulse & 1)]
+
+        return np.array(rays + biome_oh + [rot_flag] + p_bits, dtype=np.float32)
+
+    def step(self) -> dict:
+        """1フレーム処理。"""
+        if not self.alive:
+            return {'done': True, 'reward': 0.0}
+
+        # 観測ベクトル構築（受信パルスは前フレームのもの）
+        last_pulse = self.bn._last_pulse
+        obs_sage  = self._build_sage_obs(last_pulse)
+        obs_brute = self._build_brute_obs(last_pulse)
+
+        # ボトルネック経由で行動取得
+        action = self.bn.step(obs_sage, obs_brute)
+        accel, steer, brake = float(action[0]), float(action[1]), float(action[2])
+
+        # 車体物理更新
+        self._physics_step(accel, steer, brake)
+
+        # エネルギー消費
+        self.energy -= ENERGY_DECAY
+        if self.is_toxic:
+            self.energy += ENERGY_TOXIC
+            self.is_toxic = False
+
+        # キノコ収集判定
+        m = self.field.collect_mushroom(self.pos.x, self.pos.y)
+        reward = 0.0
+        if m is not None:
+            reward += self._eat_mushroom(m)
+            self.food_collected += 1
+            self.field.respawn_mushroom()
+
+        # ゴール判定
+        goal = pygame.Vector2(*self.field.goal_pos)
+        if (self.pos - goal).length() < GOAL_RADIUS:
+            reward += ENERGY_GOAL
+            self.energy = min(MAX_ENERGY, self.energy + ENERGY_GOAL)
+            self.goal_count += 1
+            self.intake_history.clear()
+            self.toxic_count = 0
+            self.last_species = None
+
+        # 生存報酬
+        reward += REWARD_SURVIVE
+        if self.speed > IDLE_SPEED_THRESH:
+            reward += REWARD_MOVE * self.speed
+
+        self.total_reward += reward
+        self.frame += 1
+
+        # 死亡判定
+        done = False
+        if self.energy <= 0.0:
+            self.alive = False
+            reward += PENALTY_DEATH
+            self.total_reward += PENALTY_DEATH
+            done = True
+
+        return {'done': done, 'reward': reward}
+
+    def _physics_step(self, accel: float, steer: float, brake: float):
+        """簡易車体物理。"""
+        turn = (steer - 0.5) * 2.0 * CAR_TURN_SPEED
+        self.angle = (self.angle + turn * self.speed / max(0.1, CAR_MAX_SPEED)) % 360
+
+        target_speed = accel * CAR_MAX_SPEED * (1.0 - brake * CAR_BRAKE)
+        self.speed += (target_speed - self.speed) * CAR_ACCEL
+        self.speed *= (1.0 - CAR_FRICTION)
+        self.speed  = max(0.0, min(CAR_MAX_SPEED, self.speed))
+
+        angle_rad = math.radians(self.angle)
+        self.pos.x += math.cos(angle_rad) * self.speed
+        self.pos.y += math.sin(angle_rad) * self.speed
+        self.pos.x = max(0, min(WORLD_W - 1, self.pos.x))
+        self.pos.y = max(0, min(WORLD_H - 1, self.pos.y))
+
+    def _eat_mushroom(self, m: Mushroom) -> float:
+        """キノコを食べてエネルギー変化と報酬を計算する。"""
+        if m.is_rotten:
+            self.energy = max(0.0, self.energy + ENERGY_ROTTEN)
+            # 腐敗はカウントに含まない
+            return ENERGY_ROTTEN
+
+        # 中毒チェック
+        if m.species_key == self.last_species:
+            self.toxic_count += 1
+        else:
+            self.toxic_count = 1
+            self.last_species = m.species_key
+
+        if self.toxic_count >= TOXIC_COUNT:
+            self.is_toxic = True
+            self.toxic_count = 0
+
+        # 摂取履歴更新
+        self.intake_history.append(m.species_key)
+        if len(self.intake_history) > HISTORY_LEN:
+            self.intake_history.pop(0)
+
+        # 回復チェック: 直近履歴内に異なるバイオームの普通種2種が揃うか
+        normal_biomes = set(
+            k[0] for k in self.intake_history
+            if k[1] == 'normal'
+        )
+        if len(normal_biomes) >= 2:
+            self.energy = min(MAX_ENERGY, self.energy + abs(ENERGY_TOXIC))
+            self.intake_history.clear()
+
+        # エネルギー回復
+        gain = MUSHROOM_SPECIES[m.species_key]
+        self.energy = min(MAX_ENERGY, self.energy + gain)
+        return gain
 
 
 # ================================================================
@@ -216,9 +318,9 @@ class GeneticAlgorithm:
         ]
         self.species: list[Species] = []
 
-        self.best_fitness_history:   list[float] = []
-        self.avg_fitness_history:    list[float] = []
-        self.species_count_history:  list[int]   = []
+        self.best_fitness_history:  list[float] = []
+        self.avg_fitness_history:   list[float] = []
+        self.species_count_history: list[int]   = []
 
         self._mut_rate = GA_MUTATION_RATE
         self._mut_std  = GA_MUTATION_STD
@@ -264,10 +366,8 @@ class GeneticAlgorithm:
     def evolve(self):
         self._speciate()
         fits = [g.fitness for g in self.population]
-        best = max(fits)
-        avg  = sum(fits) / len(fits)
-        self.best_fitness_history.append(best)
-        self.avg_fitness_history.append(avg)
+        self.best_fitness_history.append(max(fits))
+        self.avg_fitness_history.append(sum(fits) / len(fits))
         self.species_count_history.append(len(self.species))
         self._adaptive_mutation()
 
@@ -275,14 +375,15 @@ class GeneticAlgorithm:
         sorted_pop = sorted(self.population, key=lambda g: g.fitness, reverse=True)
         new_pop.extend(sorted_pop[:self.elite_count])
 
-        total_adj_fit = 0.0
         fits_min = min(fits)
-        for sp in self.species:
-            total_adj_fit += sum(m.fitness - fits_min + 1e-6 for m in sp.members)
+        total_adj = sum(
+            sum(m.fitness - fits_min + 1e-6 for m in sp.members)
+            for sp in self.species
+        )
 
         while len(new_pop) < self.pop_size:
-            sp = self._select_species(total_adj_fit, fits_min)
-            if sp is None or len(sp.members) == 0:
+            sp = self._select_species(total_adj, fits_min)
+            if sp is None or not sp.members:
                 parent = self._tournament(self.population)
                 child = parent.mutate(self._mut_rate, self._mut_std)
             elif len(sp.members) == 1 or self.rng.random() < 0.25:
@@ -298,10 +399,10 @@ class GeneticAlgorithm:
         self.population = new_pop[:self.pop_size]
         self.generation += 1
 
-    def _select_species(self, total_adj_fit: float, fits_min: float):
-        if not self.species or total_adj_fit <= 0:
+    def _select_species(self, total_adj: float, fits_min: float):
+        if not self.species or total_adj <= 0:
             return None
-        r = self.rng.random() * total_adj_fit
+        r = self.rng.random() * total_adj
         acc = 0.0
         for sp in self.species:
             acc += sum(m.fitness - fits_min + 1e-6 for m in sp.members)
@@ -319,28 +420,11 @@ class GeneticAlgorithm:
     def get_stats(self) -> dict:
         fits = [g.fitness for g in self.population]
         return {
-            "generation": self.generation,
-            "best":       max(fits),
-            "avg":        sum(fits) / len(fits),
-            "worst":      min(fits),
-            "species":    len(self.species),
-            "mut_rate":   self._mut_rate,
-            "mut_std":    self._mut_std,
+            'generation': self.generation,
+            'best':       max(fits),
+            'avg':        sum(fits) / len(fits),
+            'worst':      min(fits),
+            'species':    len(self.species),
+            'mut_rate':   self._mut_rate,
+            'mut_std':    self._mut_std,
         }
-
-
-# ================================================================
-class GAAgent(Agent):
-    """バッファGRUゲノムを使って行動するエージェント。"""
-
-    def __init__(self, car: Car, field: Field, genome: GAGenome):
-        super().__init__(car, field)
-        self.genome = genome
-        self.bn = RNNBottleneck(genome.sensory, genome.motor)
-        self.bn.reset()
-
-    def act(self) -> tuple[float, float, float]:
-        obs    = self.car.get_observation(self.field)
-        action = self.bn.step(obs)
-        self.genome.update_activations(self.bn, obs)
-        return tuple(max(0.0, min(1.0, v)) for v in action[:3])

@@ -1,235 +1,182 @@
 """
-bottleneck.py — ボトルネック通信路
-5Hz / 4bits の同期パルス通信路。
-現在はスタブ（パススルー）実装。
-将来: 感覚の海馬RNN → パルス量子化 → 運動の海馬RNN に差し替える。
+bottleneck.py — リアルタイム半双方向通信バス（Sage-Brute版）
 
-【インターフェース仕様】
-  push(obs: list[float]) -> None
-      感覚系から観測ベクトルを受け取る（傾聴ターン中に毎フレーム呼ぶ）
+リアルタイム同期方式:
+  生成と消化を同周期（PULSE_GEN_INTERVAL=6フレーム）に同期。
+  _outgoingバッファ廃止・生成と同時に転送。
+  ターン境界は方向切替のみ（バッファ引き継ぎ）。
 
-  tick(dt: float) -> tuple[list[int] | None, str]
-      フレームごとに呼ぶ。
-      Returns:
-        pulse: list[int] shape=(4,) or None（パルスが発火しないフレーム）
-        mode:  "listen" | "speak"
-
-  get_action() -> list[float]
-      運動系が使う行動指令 [accel, steer, brake] を返す（発話ターン中）
-
-  get_pulse_history() -> list[list[int]]
-      直近20パルスの履歴（HUD表示用）
+方向:
+  S→B: SAGEが送信・BRUTEが受信
+  B→S: BRUTEが送信・SAGEが受信
 """
-from config import BN_HZ, BN_TURN_SEC, BN_PARAMS, BN_PULSES_PER_TURN, FPS, VISION_RAYS, PHONEME_TABLE
-import math
+import numpy as np
+from config import (
+    PULSE_GEN_INTERVAL, PULSE_CONSUME_RATE, TURN_FRAMES, PULSE_TOTAL,
+    PHONEME_TABLE,
+)
 
 
 class Bottleneck:
-    """
-    スタブ実装：観測ベクトルを直接行動にマッピングする。
-    RNN実装に差し替える際はこのクラスを継承してオーバーライドする。
-    """
+    """リアルタイム半双方向通信バス。"""
 
-    def __init__(self, weights=None):
-        # weights: GA最適化対象の重みベクトル（スタブではシンプルな線形写像）
-        import numpy as np
-        self.weights = weights  # shape (3, 6) or None
+    def __init__(self, sage, brute):
+        self.sage  = sage
+        self.brute = brute
 
-        self._frame_count  = 0
-        self._pulse_timer  = 0.0
-        self._pulse_interval = 1.0 / BN_HZ   # 0.1秒（10Hz）
-        self._turn_timer   = 0.0
-        self._turn_duration = float(BN_TURN_SEC)
-        self._mode         = "listen"   # "listen" | "speak"
+        self._buf:       list[int] = []
+        self._frame:     int = 0
+        self._turn:      int = 0
+        self.direction:  str = 'S→B'   # 'S→B' or 'B→S'
 
-        self._obs_buffer: list[list[float]] = []
-        obs_dim = 6 + VISION_RAYS
-        self._last_obs: list[float] = [0.5] + [0.0] * (obs_dim - 1)
-        self._last_action: list[float] = [0.0, 0.5, 0.0]
-        self._pulse_history: list[list[int]] = []
-        self._current_pulse: list[int] = [0, 0]   # 2bits
+        self._last_action: np.ndarray = np.array([0.0, 0.5, 0.0])
+        self._last_pulse:  int = 0
 
-        # ---- 音声変換フック ----
-        # audio_enabled=Trueにするとパルス発火時にPhonemeConverter.play()を呼ぶ
-        # 将来のRNN実装後もこのフックは差し替え不要
+        # 表示・音声専用
+        self._display_queue:   list[int] = []
+        self._display_history: list[int] = []
+        self._display_phoneme: str = ""
+        self._display_frame:   int = 0
+
         self.audio_enabled: bool = False
-        self.converter = None   # PhonemeConverterインスタンス（遅延初期化）
-        self.decoder   = None   # PhonemeDecoderインスタンス（遅延初期化）
-        self._last_phoneme: str = ""   # 直近の音素（HUD表示用）
+        self.converter = None
+        self._last_phoneme: str = ""
 
-        # ---- ダミーサイクルモード ----
-        # Trueの場傂、_fire_pulse()は観測ベクトルではなく
-        # 時刻ベースで全パターンを循環する
-        # 将来のRNN実装時はFalseに変更するだけで差し替え可能
-        self.use_dummy_cycle: bool = True
-        self._dummy_step: int = 0   # 循環カウンタ
+    def reset(self, prefill: bool = True):
+        self._buf      = []
+        self._frame    = 0
+        self._turn     = 0
+        self.direction = 'S→B'
+        self._last_action   = np.array([0.0, 0.5, 0.0])
+        self._last_pulse    = 0
+        self._display_queue   = []
+        self._display_history = []
+        self._display_phoneme = ""
+        self._display_frame   = 0
+        self.sage.reset_episode()
+        self.brute.reset_episode()
 
-    # ----------------------------------------------------------------
-    def push(self, obs: list[float]) -> None:
-        """感覚系から観測ベクトルを受け取る。"""
-        self._last_obs = obs
-        self._obs_buffer.append(obs)
+        if prefill:
+            # ダミー入力で1発生成してパイプラインを起動
+            dummy_sage  = np.zeros(self.sage.W3.shape[1])
+            dummy_brute = np.zeros(self.brute.W3.shape[1])
+            if self.direction == 'S→B':
+                p = self.sage.forward(dummy_sage, is_pulse_frame=True)
+            else:
+                _, p = self.brute.forward(dummy_brute, is_pulse_frame=True)
+            self._buf = [p]
+            self._display_queue = [p]
 
-    # ----------------------------------------------------------------
-    def tick(self, dt: float) -> tuple[list[int] | None, str]:
+    def step(self, obs_sage: np.ndarray, obs_brute: np.ndarray) -> np.ndarray:
         """
-        フレームごとに呼ぶ。
-        Returns: (pulse or None, mode)
+        1フレーム処理。
+        Returns: BRUTEの行動ベクトル [Accel, Steer, Brake]
         """
-        self._pulse_timer  += dt
-        self._turn_timer   += dt
+        f = self._frame
+        is_gen  = (f % PULSE_GEN_INTERVAL == 0)
+        is_cons = (f % PULSE_CONSUME_RATE == 0)
+        is_turn = (f > 0 and f % TURN_FRAMES == 0)
 
-        # ターン切替（4秒固定）
-        if self._turn_timer >= self._turn_duration:
-            self._turn_timer -= self._turn_duration
-            self._mode = "speak" if self._mode == "listen" else "listen"
-            self._obs_buffer.clear()
+        # --- 1. パルス生成（送信側）→ 即座にバッファへ ---
+        if is_gen:
+            if self.direction == 'S→B':
+                pulse = self.sage.forward(obs_sage, is_pulse_frame=True)
+            else:
+                _, pulse = self.brute.forward(obs_brute, is_pulse_frame=True)
+            self._buf.append(pulse)
+            self._last_pulse = pulse
+            # 表示キューにも追加
+            self._display_queue.append(pulse)
+        else:
+            # 非生成フレームでも両NNはobsを処理（GRU隠れ状態を更新）
+            self.sage.forward(obs_sage, is_pulse_frame=False)
+            _, _ = self.brute.forward(obs_brute, is_pulse_frame=False)
 
-        # パルス発火（200msごと）
-        pulse = None
-        if self._pulse_timer >= self._pulse_interval:
-            self._pulse_timer -= self._pulse_interval
-            pulse = self._fire_pulse()
-            self._pulse_history.append(pulse[:])
-            if len(self._pulse_history) > BN_PULSES_PER_TURN:
-                self._pulse_history.pop(0)
-            self._current_pulse = pulse
+        # --- 2. 表示タイマー: 生成と同周期でスロット点灯・音声出力 ---
+        if self._display_queue and self._display_frame % PULSE_GEN_INTERVAL == 0:
+            dp = self._display_queue.pop(0)
+            self._display_history.append(dp)
+            if len(self._display_history) > PULSE_TOTAL:
+                self._display_history.pop(0)
+            self._display_phoneme = PHONEME_TABLE.get(dp & 0x3, "")
+            self._last_phoneme    = self._display_phoneme
+            if self.audio_enabled and self.converter is not None:
+                try:
+                    self.converter.play(dp, self.direction)
+                except Exception:
+                    pass
+        self._display_frame += 1
 
-            # 音声変換フック（2bits）
-            bits2 = (pulse[0] << 1) | pulse[1]
-            self.on_pulse_emit(bits2)
+        # --- 3. パルス消化（受信側）---
+        if is_cons and self._buf:
+            pulse = self._buf.pop(0)
+            if self.direction == 'S→B':
+                # SAGEからBRUTEへ: パルスをBRUTE obsに注入して行動取得
+                obs_b = obs_brute.copy()
+                obs_b[-2] = float((pulse >> 1) & 1)
+                obs_b[-1] = float(pulse & 1)
+                action, _ = self.brute.forward(obs_b, is_pulse_frame=True)
+                self._last_action = action
+            else:
+                # BRUTEからSAGEへ: パルスをSAGE obsに注入
+                obs_s = obs_sage.copy()
+                obs_s[-2] = float((pulse >> 1) & 1)
+                obs_s[-1] = float(pulse & 1)
+                self.sage.forward(obs_s, is_pulse_frame=True)
 
-            # 発話ターンのパルスから行動を更新
-            if self._mode == "speak":
-                self._last_action = self._decode_action(pulse)
+        # --- 4. ターン切替（方向のみ・バッファ引き継ぎ）---
+        if is_turn:
+            self._turn += 1
+            self.direction = 'B→S' if self.direction == 'S→B' else 'S→B'
 
-        return pulse, self._mode
+        self._frame += 1
+        return self._last_action
 
-    # ----------------------------------------------------------------
-    def _fire_pulse(self) -> list[int]:
-        """
-        2bitsパルスを生成する。
-
-        use_dummy_cycle=True（デフォルト）:
-          パルス発火ごとに 00→ 01→ 10→ 11 を循環。
-          将来のRNN実装時は use_dummy_cycle=False に変更するだけ。
-
-        use_dummy_cycle=False:
-          観測ベクトルから線形閾値で変換（スタブ）。
-        """
-        if self.use_dummy_cycle:
-            # 00 -> 01 -> 10 -> 11 -> 00 ... を循環
-            bits2 = self._dummy_step % 4
-            self._dummy_step += 1
-            return [(bits2 >> 1) & 1, bits2 & 1]
-
-        # RNN実装用スタブ（観測ベクトルから変換）
-        obs = self._last_obs
-        p0 = 1 if obs[0] < 0.4 else 0
-        p1 = 1 if obs[1] > 0.3 else 0
-        return [p0, p1]
-
-    # ----------------------------------------------------------------
-    def _decode_action(self, pulse: list[int]) -> list[float]:
-        """
-        2bitsパルスを行動 [accel, steer, brake] に変換する（スタブ）。
-        将来: 運動の海馬LSTM → 補間層 に差し替え。
-        """
-        p = pulse
-        accel = 0.6 if p[0] == 0 else 0.3   # エネルギー低いと減速
-        steer = 0.5 + (p[1] - 0.5) * 0.5    # ゴール方向
-        brake = 0.0
-        return [
-            max(0.0, min(1.0, accel)),
-            max(0.0, min(1.0, steer)),
-            max(0.0, min(1.0, brake)),
-        ]
-
-    # ----------------------------------------------------------------
-    # ----------------------------------------------------------------
-    # 音声変換フック（将来のRNN実装後も差し替え不要）
-    # ----------------------------------------------------------------
-    def on_pulse_emit(self, bits2: int) -> None:
-        """パルス送信時に呼ばれるフック（2bits）。
-        audio_enabled=Trueの場合は PhonemeConverter.play() を呼び出す。
-        通信方向（_mode）に応じてピッチを変える。
-        """
-        # 通信方向をピッチに変換
-        direction = 'S→M' if self._mode == 'listen' else 'M→S'
-        self._last_phoneme = PHONEME_TABLE.get(bits2 & 0x3, "")
-        if self.audio_enabled and self.converter is not None:
-            try:
-                self.converter.play(bits2, direction=direction)
-            except Exception:
-                pass
-
-    def on_pulse_receive(self, frame) -> int:
-        """マイク入力時に呼ばれるフック。
-        audio_enabled=Trueの場合は PhonemeDecoder.decode() を呼び出す。
-        Returns: 復元された 2bits整数
-        """
-        if self.audio_enabled and self.decoder is not None:
-            try:
-                return self.decoder.decode(frame)
-            except Exception:
-                pass
-        return 0
-
-    def enable_audio(self) -> None:
-        """音声変換を有効化する。PhonemeConverter/Decoderを遅延初期化する。"""
+    # ---- 音声 ----
+    def enable_audio(self):
         if self.audio_enabled:
             return
         try:
-            from game.phoneme import PhonemeConverter, PhonemeDecoder
+            from game.phoneme import PhonemeConverter
             if self.converter is None:
                 self.converter = PhonemeConverter()
-            if self.decoder is None:
-                self.decoder = PhonemeDecoder()
             self.audio_enabled = True
-        except Exception as e:
-            print(f"[Bottleneck] audio enable failed: {e}")
+        except Exception:
+            pass
 
-    def disable_audio(self) -> None:
-        """音声変換を無効化する。"""
+    def disable_audio(self):
         self.audio_enabled = False
 
     def toggle_audio(self) -> bool:
-        """音声ON/OFFを切り替える。結果の状態を返す。"""
         if self.audio_enabled:
             self.disable_audio()
         else:
             self.enable_audio()
         return self.audio_enabled
 
-    def get_last_phoneme(self) -> str:
-        """直近の音素文字列を返す（HUD表示用）。"""
-        return self._last_phoneme
-
-    # ----------------------------------------------------------------
-    def get_action(self) -> list[float]:
-        return self._last_action
-
-    def get_pulse_history(self) -> list[list[int]]:
-        return self._pulse_history
-
+    # ---- getters（renderer互換） ----
     def get_mode(self) -> str:
-        return self._mode
+        return 'listen' if self.direction == 'S→B' else 'speak'
 
     def get_turn_progress(self) -> float:
-        """現在のターンの進捗（0〜1）"""
-        return self._turn_timer / self._turn_duration
+        return (self._frame % TURN_FRAMES) / TURN_FRAMES
 
     def get_current_pulse(self) -> list[int]:
-        return self._current_pulse
+        p = self._last_pulse
+        return [(p >> 1) & 1, p & 1]
 
-    def reset(self):
-        self._frame_count  = 0
-        self._pulse_timer  = 0.0
-        self._turn_timer   = 0.0
-        self._mode         = "listen"
-        self._obs_buffer.clear()
-        self._last_obs     = [0.5] + [0.0] * (6 + VISION_RAYS - 1)
-        self._last_action  = [0.0, 0.5, 0.0]
-        self._pulse_history.clear()
-        self._current_pulse = [0, 0]   # 2bits
-        self._dummy_step    = 0
+    def get_pulse_history(self) -> list[list[int]]:
+        return [[(p >> 1) & 1, p & 1] for p in self._display_history]
+
+    def get_display_history(self) -> list[list[int]]:
+        return self.get_pulse_history()
+
+    def get_display_phoneme(self) -> str:
+        return self._display_phoneme
+
+    def get_display_progress(self) -> float:
+        total = PULSE_TOTAL
+        return len(self._display_history) / total if total > 0 else 0.0
+
+    def get_last_phoneme(self) -> str:
+        return self._last_phoneme
